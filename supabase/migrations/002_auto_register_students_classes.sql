@@ -37,6 +37,14 @@ BEGIN
         ALTER TABLE public.classes ALTER COLUMN id TYPE TEXT USING id::text;
     END IF;
 
+    -- Ubah tipe kolom class_id di tabel profiles jika sebelumnya UUID
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'class_id' AND data_type != 'text'
+    ) THEN
+        ALTER TABLE public.profiles ALTER COLUMN class_id TYPE TEXT USING class_id::text;
+    END IF;
+
     -- Ubah tipe kolom id dan class_id di tabel students jika sebelumnya UUID
     IF EXISTS (
         SELECT 1 FROM information_schema.columns 

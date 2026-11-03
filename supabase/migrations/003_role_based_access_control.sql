@@ -83,3 +83,4 @@ CREATE POLICY "Only admin and service role can modify teachers"
 ON public.teachers FOR ALL
 USING (true)
 WITH CHECK (true);
+
