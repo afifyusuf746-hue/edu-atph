@@ -239,6 +239,7 @@ CREATE POLICY "Allow insert class_students" ON public.class_students FOR INSERT 
 DROP POLICY IF EXISTS "Allow manage class_students" ON public.class_students;
 CREATE POLICY "Allow manage class_students" ON public.class_students FOR ALL USING (true) WITH CHECK (true);
 
+
 DROP POLICY IF EXISTS "Allow read assessments" ON public.assessments;
 CREATE POLICY "Allow read assessments" ON public.assessments FOR SELECT USING (true);
 
