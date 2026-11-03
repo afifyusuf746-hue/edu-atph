@@ -70,11 +70,19 @@ export default function Navbar() {
           <div className="hidden md:flex items-center gap-3">
             {currentUser ? (
               <Link
-                href={currentUser.role === 'admin' ? '/admin/dashboard' : '/student/dashboard'}
+                href={
+                  currentUser.role === 'admin'
+                    ? '/admin/dashboard'
+                    : currentUser.role === 'teacher'
+                    ? '/guru/dashboard'
+                    : '/student/dashboard'
+                }
                 className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 shadow-md shadow-emerald-600/20 transition-all hover:scale-[1.02]"
               >
                 <Sparkles className="w-4 h-4" />
-                <span>Dashboard {currentUser.role === 'admin' ? 'Guru' : 'Siswa'}</span>
+                <span>
+                  Dashboard {currentUser.role === 'admin' ? 'Admin' : currentUser.role === 'teacher' ? 'Guru' : 'Siswa'}
+                </span>
               </Link>
             ) : (
               <Link

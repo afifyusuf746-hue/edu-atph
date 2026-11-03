@@ -109,7 +109,7 @@ export const DataProvider = {
   login(
     email: string = '',
     passwordOrRole: string = '',
-    role?: 'admin' | 'student',
+    role?: 'admin' | 'teacher' | 'student',
     selectedClassId?: string,
     fullName?: string
   ): UserProfile | null {
@@ -117,10 +117,10 @@ export const DataProvider = {
     const cleanEmail = (email || '').trim().toLowerCase();
 
     // 1. Determine role
-    let targetRole: 'admin' | 'student' | undefined = role;
+    let targetRole: 'admin' | 'teacher' | 'student' | undefined = role;
     let password = '';
 
-    if (passwordOrRole === 'admin' || passwordOrRole === 'student') {
+    if (passwordOrRole === 'admin' || passwordOrRole === 'teacher' || passwordOrRole === 'student') {
       targetRole = passwordOrRole;
     } else {
       password = passwordOrRole;
@@ -245,6 +245,7 @@ export const DataProvider = {
   logout(): void {
     if (typeof window !== 'undefined') {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+      document.cookie = 'edu_user_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
       document.cookie = 'edu_student_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
     }
   },

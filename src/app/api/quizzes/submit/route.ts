@@ -81,6 +81,7 @@ export async function POST(req: NextRequest) {
     const attemptId = `att-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
     const nowIso = new Date().toISOString();
     const startIso = startedAt || new Date(Date.now() - 15 * 60000).toISOString();
+    const durationSeconds = Math.max(1, Math.round((new Date(nowIso).getTime() - new Date(startIso).getTime()) / 1000));
 
     const attemptResult = {
       id: attemptId,
@@ -122,9 +123,13 @@ export async function POST(req: NextRequest) {
       // A. Simpan / Perbarui data Siswa ke tabel `students` jika tersedia
       try {
         const studentPayload: any = {
+          id: studentId,
           full_name: studentName,
-          class_name: className || 'X ATPH',
+          class_name: className || 'X AT 1',
+          nis: studentNisn || '-',
           nisn: studentNisn || '-',
+          status: 'active',
+          last_login_at: nowIso,
         };
         if (studentEmail) {
           studentPayload.email = studentEmail.trim().toLowerCase();
@@ -219,6 +224,54 @@ export async function POST(req: NextRequest) {
       } catch (err: any) {
         console.warn('grades insert non-fatal error:', err?.message);
       }
+
+      // E. Simpan ke tabel `assessments` (Permintaan Arsitektur EduATPH)
+      try {
+        await supabase.from('assessments').insert({
+          student_id: studentId,
+          student_name: studentName,
+          student_nis: studentNisn || '-',
+          class_name: className || 'X AT 1',
+          quiz_id: quizId,
+          quiz_title: quizTitle,
+          score: percentage,
+          max_score: 100,
+          is_passed: isPassed,
+          aspect_scores: {
+            correct_answers: correctCount,
+            incorrect_answers: wrongCount,
+            total_questions: questions.length,
+            topic: quiz?.topic || 'Pengelolaan Faktor Produksi',
+            duration_seconds: durationSeconds,
+            percentage,
+            completed_at: nowIso,
+          },
+          notes: `Kuis ${quizTitle} - Skor: ${percentage}/100 (${isPassed ? 'Tuntas' : 'Remidi'})`,
+        });
+      } catch (err: any) {
+        console.warn('assessments insert non-fatal error:', err?.message);
+      }
+
+      // F. Simpan juga ke tabel baru `edu_quiz_attempts`, `edu_quiz_answers`, `edu_grades` jika tabel tersedia
+      try {
+        await supabase.from('edu_quiz_attempts').insert({
+          score: percentage,
+          total_questions: questions.length,
+          correct_answers: correctCount,
+          wrong_answers: wrongCount,
+          started_at: startIso,
+          completed_at: nowIso,
+          status: 'completed',
+        });
+      } catch {}
+
+      try {
+        await supabase.from('edu_grades').insert({
+          grade_type: 'quiz',
+          score: percentage,
+          notes: `Kuis ${quizTitle} - Skor: ${percentage}/100 (${isPassed ? 'Tuntas' : 'Remidi'})`,
+        });
+      } catch {}
 
     } catch (err: any) {
       console.warn('Supabase connection error:', err.message);

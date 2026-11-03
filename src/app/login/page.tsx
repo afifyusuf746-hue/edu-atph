@@ -132,20 +132,41 @@ export default function StudentLoginPage() {
       if (deferredPrompt && !isInstalled) {
         await triggerNativePrompt();
       } else if (platform === 'android' && !isInstalled && !deferredPrompt) {
-        // Show guide if prompt not available
         setShowAndroidGuide(true);
       }
     }
 
-    setTimeout(() => {
-      const user = DataProvider.login('', 'student', undefined, selectedClass);
-      if (user) {
+    try {
+      // Daftarkan / Verifikasi akun siswa demo langsung ke Supabase
+      const res = await fetch('/api/auth/student-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'siswa.demo@atph.sch.id',
+          password: 'skaneba123',
+          classId: selectedClass,
+          fullName: 'Siswa Demo ATPH',
+        }),
+      });
+
+      const json = await res.json();
+      if (res.ok && json.success && json.user) {
+        DataProvider.setCurrentUser(json.user);
         router.push('/student/dashboard');
-      } else {
-        setErrorMessage('Gagal memuat data akun siswa.');
-        setLoading(false);
+        return;
       }
-    }, 350);
+    } catch (err) {
+      console.warn('Quick login server sync fallback:', err);
+    }
+
+    // Fallback lokal jika jaringan offline
+    const user = DataProvider.login('', 'student', undefined, selectedClass);
+    if (user) {
+      router.push('/student/dashboard');
+    } else {
+      setErrorMessage('Gagal memuat data akun siswa.');
+      setLoading(false);
+    }
   };
 
   const handleFormLogin = async (e: React.FormEvent) => {
@@ -154,18 +175,12 @@ export default function StudentLoginPage() {
     const cleanPassword = password.trim();
 
     if (!cleanEmail) {
-      setErrorMessage('Silakan masukkan alamat email siswa Anda.');
+      setErrorMessage('Silakan masukkan alamat email akun Anda.');
       return;
     }
 
     if (!cleanPassword) {
       setErrorMessage('Silakan masukkan kata sandi Anda (password resmi: skaneba123).');
-      return;
-    }
-
-    // Validasi kata sandi wajib skaneba123
-    if (cleanPassword !== 'skaneba123') {
-      setErrorMessage('Kata sandi salah! Password resmi siswa adalah: skaneba123');
       return;
     }
 
@@ -177,50 +192,61 @@ export default function StudentLoginPage() {
       await triggerNativePrompt();
     }
 
-    setTimeout(() => {
-      // Cek apakah akun yang diinput adalah administrator
-      const users = DataProvider.getUsers();
-      const targetUser = users.find((u) => u.email.toLowerCase() === cleanEmail);
+    // Autentikasi Terpadu Berdasarkan Hak Akses (Admin, Guru, Siswa)
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          password: cleanPassword,
+          classId: selectedClass,
+          fullName: fullName.trim(),
+        }),
+      });
 
-      const isAdminAttempt =
-        (targetUser && targetUser.role === 'admin') ||
-        cleanEmail.includes('admin') ||
-        cleanEmail.includes('okta.nofiyanto');
+      const json = await res.json();
 
-      if (isAdminAttempt) {
-        const adminUser = DataProvider.login(cleanEmail, cleanPassword, 'admin');
-        if (adminUser && adminUser.role === 'admin') {
-          router.push('/admin/dashboard');
-          return;
-        } else {
-          setLoading(false);
-          setErrorMessage('Kata sandi administrator salah. Silakan periksa kembali.');
-          return;
-        }
-      }
-
-      // Login akun siswa dengan email sendiri, password skaneba123, dan kelas yang dipilih
-      const user = DataProvider.login(cleanEmail, cleanPassword, 'student', selectedClass, fullName.trim());
-      if (user && user.role === 'student') {
-        // Set secure session cookie via server API for persistent auth
-        fetch('/api/auth/student-session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: cleanEmail,
-            password: cleanPassword,
-            classId: user.classId,
-            className: user.className,
-            fullName: user.fullName,
-          }),
-        }).catch(() => {});
-
-        router.push('/student/dashboard');
-      } else {
+      if (!res.ok || !json.success) {
         setLoading(false);
-        setErrorMessage('Gagal memproses masuk. Silakan periksa kembali email Anda.');
+        setErrorMessage(json.error || 'Gagal memproses masuk. Periksa kembali email dan kata sandi.');
+        return;
       }
-    }, 400);
+
+      const serverUser = json.user;
+      if (serverUser) {
+        // Sinkronkan ke DataProvider lokal agar kompatibel dengan seluruh komponen UI
+        DataProvider.setCurrentUser(serverUser);
+
+        // Jika belum ada di list pengguna lokal, tambahkan
+        const localUsers = DataProvider.getUsers();
+        if (!localUsers.some((u) => u.email.toLowerCase() === cleanEmail)) {
+          localUsers.push(serverUser);
+          try {
+            localStorage.setItem('eduatph_users', JSON.stringify(localUsers));
+          } catch {}
+        }
+
+        // Arahkan ke dashboard sesuai role pengguna
+        router.push(json.redirectUrl || '/student/dashboard');
+        return;
+      }
+    } catch (err: any) {
+      console.warn('Login network error:', err);
+    }
+
+    // Fallback lokal jika ada kendala jaringan total
+    const fallbackUser = DataProvider.login(cleanEmail, cleanPassword, 'student', selectedClass, fullName.trim());
+    if (fallbackUser) {
+      if (fallbackUser.role === 'admin') {
+        router.push('/admin/dashboard');
+      } else {
+        router.push('/student/dashboard');
+      }
+    } else {
+      setLoading(false);
+      setErrorMessage('Gagal memproses masuk. Silakan periksa kembali email Anda.');
+    }
   };
 
   const PlatformIcon = platform === 'ios' ? Apple : platform === 'android' ? Smartphone : Monitor;

@@ -93,26 +93,16 @@ export default function DashboardHeader({ title, subtitle, onRefresh }: Dashboar
     }
   };
 
-  const switchRole = (role: 'admin' | 'student') => {
-    setMenuOpen(false);
-    const users = DataProvider.getUsers();
-    if (role === 'admin') {
-      const admin = users.find((u) => u.role === 'admin') || users[0];
-      DataProvider.setCurrentUser(admin);
-      setCurrentUser(admin);
-      router.push('/admin/dashboard');
-    } else {
-      const student = users.find((u) => u.role === 'student') || users[1];
-      DataProvider.setCurrentUser(student);
-      setCurrentUser(student);
-      router.push('/student/dashboard');
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/student-session', { method: 'DELETE' });
+    } catch {}
+    if (typeof document !== 'undefined') {
+      document.cookie = 'edu_user_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
+      document.cookie = 'edu_student_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
     }
-  };
-
-  const handleLogout = () => {
-    const wasAdmin = currentUser?.role === 'admin' || pathname?.startsWith('/admin');
     DataProvider.logout();
-    router.push(wasAdmin ? '/admin/login' : '/login');
+    router.push('/login');
   };
 
   const handleAdminToggle = () => {
@@ -463,45 +453,14 @@ export default function DashboardHeader({ title, subtitle, onRefresh }: Dashboar
                 <p className="text-xs text-slate-500 truncate">{currentUser?.email}</p>
                 <div className="mt-2 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400">
                   <Sparkles className="w-3 h-3" />
-                  <span>{currentUser?.role === 'admin' ? 'Akses Penuh Guru' : 'Akun Siswa'}</span>
+                  <span>
+                    {currentUser?.role === 'admin'
+                      ? 'Administrator Sistem'
+                      : currentUser?.role === 'teacher'
+                      ? 'Guru / Pendidik ATPH'
+                      : 'Siswa Belajar ATPH'}
+                  </span>
                 </div>
-              </div>
-
-              {/* Role switcher for easy paired testing */}
-              <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-700">
-                <p className="text-[10px] uppercase font-bold text-slate-400 px-2 mb-1">
-                  Beralih Mode Tampilan:
-                </p>
-                <button
-                  type="button"
-                  onClick={() => switchRole('admin')}
-                  className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between ${
-                    currentUser?.role === 'admin'
-                      ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 font-bold'
-                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
-                  }`}
-                >
-                  <span className="flex items-center gap-2">
-                    <Shield className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Okta Nofiyanto (Admin)</span>
-                  </span>
-                  {currentUser?.role === 'admin' && <span className="text-[10px]">Aktif</span>}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => switchRole('student')}
-                  className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between mt-1 ${
-                    currentUser?.role === 'student'
-                      ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 font-bold'
-                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
-                  }`}
-                >
-                  <span className="flex items-center gap-2">
-                    <GraduationCap className="w-3.5 h-3.5 text-teal-600" />
-                    <span>Rizky Pratama (Siswa)</span>
-                  </span>
-                  {currentUser?.role === 'student' && <span className="text-[10px]">Aktif</span>}
-                </button>
               </div>
 
               <div className="pt-1">

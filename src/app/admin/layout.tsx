@@ -22,10 +22,10 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
     const user = DataProvider.getCurrentUser();
     setCurrentUser(user);
     if (!user) {
-      router.push('/admin/login');
+      router.push('/login?redirect=/admin/dashboard');
     } else if (user.role !== 'admin') {
-      // Siswa tidak boleh melihat dashboard admin!
-      router.push('/student/dashboard');
+      // Siswa dan guru tidak boleh mengakses rute admin, arahkan ke 403 Forbidden
+      router.push('/403');
     } else {
       setAuthorized(true);
     }
