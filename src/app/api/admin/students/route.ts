@@ -48,25 +48,34 @@ export async function GET(req: NextRequest) {
     }
 
     // Format output data agar kompatibel dengan UserProfile di frontend
-    const students = (data || []).map((row: any) => ({
-      id: row.id,
-      authUserId: row.auth_user_id || null,
-      email: row.email,
-      fullName: row.full_name,
-      role: 'student' as const,
-      nisn: row.nisn || row.nis || '-',
-      nis: row.nis || row.nisn || '-',
-      classId: row.class_id || 'cls-x-at-1',
-      className: row.class_name || 'X AT 1',
-      major: row.major || 'Agribisnis Tanaman Pangan dan Hortikultura',
-      avatarUrl: row.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=250&q=80',
-      status: row.status || 'active',
-      isActive: row.status === 'active',
-      phoneNumber: row.phone_number || '',
-      lastLoginAt: row.last_login_at || row.created_at,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    const students = (data || []).map((row: any) => {
+      let resolvedClassId = row.class_id;
+      let resolvedClassName = row.class_name;
+      if (!resolvedClassId || resolvedClassName === 'X ATPH' || !resolvedClassName) {
+        resolvedClassId = 'cls-x-at-1';
+        resolvedClassName = 'X AT 1';
+      }
+
+      return {
+        id: row.id,
+        authUserId: row.auth_user_id || null,
+        email: row.email,
+        fullName: row.full_name,
+        role: 'student' as const,
+        nisn: row.nisn || row.nis || '-',
+        nis: row.nis || row.nisn || '-',
+        classId: resolvedClassId,
+        className: resolvedClassName,
+        major: row.major || 'Agribisnis Tanaman Pangan dan Hortikultura',
+        avatarUrl: row.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=250&q=80',
+        status: row.status || 'active',
+        isActive: row.status === 'active',
+        phoneNumber: row.phone_number || '',
+        lastLoginAt: row.last_login_at || row.created_at,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    });
 
     return NextResponse.json({
       success: true,

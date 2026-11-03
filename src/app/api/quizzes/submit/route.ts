@@ -5,6 +5,49 @@ import { INITIAL_QUIZZES, INITIAL_QUIZ_QUESTIONS } from '@/lib/mock-data';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ngreirksuoraurufzftn.supabase.co';
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_Tj16Oq3f9BqbVj35Le-7bQ_avuh1PjD';
 
+function resolveRombel(className?: string | null): { classId: string; className: string } {
+  const norm = (className || '').trim().toUpperCase();
+
+  if (norm.includes('X AT 1') || norm === 'X AT 1' || norm.includes('X-AT-1')) {
+    return { classId: 'cls-x-at-1', className: 'X AT 1' };
+  }
+  if (norm.includes('X AT 2') || norm === 'X AT 2' || norm.includes('X-AT-2')) {
+    return { classId: 'cls-x-at-2', className: 'X AT 2' };
+  }
+  if (norm.includes('X AT 3') || norm === 'X AT 3' || norm.includes('X-AT-3')) {
+    return { classId: 'cls-x-at-3', className: 'X AT 3' };
+  }
+
+  if (norm.includes('XI AT 1') || norm === 'XI AT 1' || norm.includes('XI-AT-1')) {
+    return { classId: 'cls-xi-at-1', className: 'XI AT 1' };
+  }
+  if (norm.includes('XI AT 2') || norm === 'XI AT 2' || norm.includes('XI-AT-2')) {
+    return { classId: 'cls-xi-at-2', className: 'XI AT 2' };
+  }
+  if (norm.includes('XI AT 3') || norm === 'XI AT 3' || norm.includes('XI-AT-3')) {
+    return { classId: 'cls-xi-at-3', className: 'XI AT 3' };
+  }
+
+  if (norm.includes('XII AT 1') || norm === 'XII AT 1' || norm.includes('XII-AT-1')) {
+    return { classId: 'cls-xii-at-1', className: 'XII AT 1' };
+  }
+  if (norm.includes('XII AT 2') || norm === 'XII AT 2' || norm.includes('XII-AT-2')) {
+    return { classId: 'cls-xii-at-2', className: 'XII AT 2' };
+  }
+  if (norm.includes('XII AT 3') || norm === 'XII AT 3' || norm.includes('XII-AT-3')) {
+    return { classId: 'cls-xii-at-3', className: 'XII AT 3' };
+  }
+
+  if (norm.includes('XII')) {
+    return { classId: 'cls-xii-at-1', className: 'XII AT 1' };
+  }
+  if (norm.includes('XI')) {
+    return { classId: 'cls-xi-at-1', className: 'XI AT 1' };
+  }
+
+  return { classId: 'cls-x-at-1', className: 'X AT 1' };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -83,13 +126,18 @@ export async function POST(req: NextRequest) {
     const startIso = startedAt || new Date(Date.now() - 15 * 60000).toISOString();
     const durationSeconds = Math.max(1, Math.round((new Date(nowIso).getTime() - new Date(startIso).getTime()) / 1000));
 
+    // Pastikan siswa terhubung dengan rombel kelas spesifik (X AT 1, X AT 2, dsb)
+    const rombel = resolveRombel(className);
+    const resolvedClassId = rombel.classId;
+    const resolvedClassName = rombel.className;
+
     const attemptResult = {
       id: attemptId,
       quizId,
       quizTitle,
       studentId,
       studentName,
-      className: className || 'X ATPH',
+      className: resolvedClassName,
       studentNisn: studentNisn || '-',
       score: percentage,
       maxScore: 100,
@@ -120,12 +168,13 @@ export async function POST(req: NextRequest) {
         auth: { persistSession: false },
       });
 
-      // A. Simpan / Perbarui data Siswa ke tabel `students` jika tersedia
+      // A. Masukkan Siswa yang sudah mengerjakan kuis ke dalam Rombel Kelas di `students` & `class_students`
       try {
         const studentPayload: any = {
           id: studentId,
           full_name: studentName,
-          class_name: className || 'X AT 1',
+          class_id: resolvedClassId,
+          class_name: resolvedClassName,
           nis: studentNisn || '-',
           nisn: studentNisn || '-',
           status: 'active',
@@ -136,14 +185,32 @@ export async function POST(req: NextRequest) {
           studentPayload.username = studentEmail.split('@')[0];
         }
         const { error: stdErr } = await supabase.from('students').upsert(studentPayload, { onConflict: 'email' });
-        if (!stdErr) studentSaved = true;
-      } catch {}
+        if (!stdErr) {
+          studentSaved = true;
+        }
+
+        // Hubungkan siswa ke rombel kelas di tabel class_students
+        try {
+          await supabase.from('class_students').upsert(
+            {
+              class_id: resolvedClassId,
+              student_id: studentId,
+              academic_year: '2025/2026',
+              status: 'active',
+            },
+            { onConflict: 'class_id,student_id' }
+          );
+        } catch {}
+      } catch (err: any) {
+        console.warn('Student rombel enrollment warning:', err?.message);
+      }
 
       // B. Simpan data percobaan ke tabel `quiz_attempts`
       const answersPayload = [
         {
           __meta: true,
-          className: className || 'X ATPH',
+          classId: resolvedClassId,
+          className: resolvedClassName,
           studentNisn: studentNisn || '-',
           subjectName: 'Dasar-Dasar Agribisnis Tanaman',
           topic: quiz?.topic || 'Pengelolaan Faktor Produksi',
@@ -207,7 +274,7 @@ export async function POST(req: NextRequest) {
         const gradePayload: any = {
           student_id: studentId,
           student_name: studentName,
-          class_name: className || 'X ATPH',
+          class_name: resolvedClassName,
           quiz_id: quizId,
           quiz_title: quizTitle,
           attempt_id: attemptId,
@@ -231,7 +298,7 @@ export async function POST(req: NextRequest) {
           student_id: studentId,
           student_name: studentName,
           student_nis: studentNisn || '-',
-          class_name: className || 'X AT 1',
+          class_name: resolvedClassName,
           quiz_id: quizId,
           quiz_title: quizTitle,
           score: percentage,
