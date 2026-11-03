@@ -22,10 +22,13 @@ import {
   Sparkles,
   ArrowUpDown,
   Check,
+  Printer,
+  User,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { DataProvider } from '@/lib/data-provider';
 import { GradeRecord, ClassItem, Quiz } from '@/types';
-import { exportToCSV, formatDate, formatDateOnly } from '@/lib/utils';
+import { formatDate, formatDateOnly } from '@/lib/utils';
 
 export interface SupabaseQuizAttempt {
   id: string;
@@ -83,6 +86,10 @@ export default function AdminGradesPage() {
   const [quizWeight, setQuizWeight] = useState(40);
   const [kkmThreshold, setKkmThreshold] = useState(75);
   const [showConfig, setShowConfig] = useState(false);
+
+  // State untuk modal ekspor (nama guru & konfirmasi)
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [namaGuru, setNamaGuru] = useState('Okta Nofiyanto, S.P.');
 
   const fetchGradesData = useCallback(async () => {
     setIsLoading(true);
@@ -218,45 +225,272 @@ export default function AdminGradesPage() {
       });
   }, [grades, searchQuery, selectedClass, assignmentWeight, quizWeight, kkmThreshold, sortBy]);
 
-  // EKSPOR REKAP HASIL KUIS (EXCEL / CSV)
-  const handleExportAttemptsCSV = () => {
+  // ─── EKSPOR EXCEL DENGAN FORMAT LENGKAP ────────────────────────────────────
+  const handleExportExcel = (namaGuruInput: string) => {
+    const tanggalCetak = new Date().toLocaleString('id-ID', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const wb = XLSX.utils.book_new();
+
     if (activeTab === 'attempts') {
-      const exportData = filteredAttempts.map((att, idx) => ({
-        No: idx + 1,
-        ID_Pengerjaan: att.id,
-        ID_Siswa: att.studentId,
-        Nama_Siswa: att.studentName,
-        NISN: att.studentNisn,
-        Kelas: att.className,
-        Mata_Pelajaran: att.subjectName || 'Dasar-Dasar Agribisnis Tanaman',
-        Nama_Kuis_Materi: att.quizTitle,
-        Nilai: att.score,
-        Jumlah_Soal: att.totalQuestions || 20,
-        Jumlah_Jawaban_Benar: att.correctCount,
-        Jumlah_Jawaban_Salah: att.wrongCount,
-        Tanggal_Pengerjaan: formatDateOnly(att.completedAt),
-        Waktu_Pengerjaan: formatDate(att.completedAt),
-        Status_Pengerjaan: att.score >= kkmThreshold ? 'Tuntas' : 'Belum Tuntas (Remidi)',
-      }));
+      // ── Sheet: Daftar Nilai Kuis ──────────────────────────────────────────
+      const sheetData: (string | number)[][] = [
+        ['REKAP NILAI KUIS SISWA'],
+        ['SMK ATPH – Dasar-Dasar Agribisnis Tanaman'],
+        ['Tahun Ajaran: 2025/2026'],
+        [],
+        ['Administrator', ':', 'Okta Nofiyanto'],
+        ['Nama Guru', ':', namaGuruInput || 'Okta Nofiyanto, S.P.'],
+        ['Tanggal Cetak', ':', tanggalCetak],
+        ['KKM', ':', kkmThreshold],
+        [],
+        [
+          'No',
+          'Nama Siswa',
+          'NISN',
+          'Kelas',
+          'Mata Pelajaran',
+          'Nama Kuis / Materi',
+          'Nilai',
+          'Jumlah Soal',
+          'Jawaban Benar',
+          'Jawaban Salah',
+          'Tanggal Pengerjaan',
+          'Waktu Pengerjaan',
+          'Status',
+        ],
+        ...filteredAttempts.map((att, idx) => [
+          idx + 1,
+          att.studentName,
+          att.studentNisn || '-',
+          att.className || '-',
+          att.subjectName || 'Dasar-Dasar Agribisnis Tanaman',
+          att.quizTitle,
+          att.score,
+          att.totalQuestions || 20,
+          att.correctCount,
+          att.wrongCount,
+          formatDateOnly(att.completedAt),
+          formatDate(att.completedAt),
+          att.score >= kkmThreshold ? 'Tuntas' : 'Belum Tuntas (Remidi)',
+        ]),
+      ];
 
-      exportToCSV(`Rekap_Hasil_Kuis_Supabase_${new Date().toISOString().slice(0, 10)}.csv`, exportData);
+      const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+      // Lebar kolom
+      ws['!cols'] = [
+        { wch: 5 },  // No
+        { wch: 28 }, // Nama Siswa
+        { wch: 16 }, // NISN
+        { wch: 12 }, // Kelas
+        { wch: 36 }, // Mata Pelajaran
+        { wch: 32 }, // Nama Kuis
+        { wch: 8 },  // Nilai
+        { wch: 12 }, // Jml Soal
+        { wch: 14 }, // Jwb Benar
+        { wch: 14 }, // Jwb Salah
+        { wch: 20 }, // Tanggal
+        { wch: 22 }, // Waktu
+        { wch: 24 }, // Status
+      ];
+
+      // Merge judul utama (A1:M1), baris 2 (A2:M2), baris 3 (A3:M3)
+      ws['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 12 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 12 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: 12 } },
+      ];
+
+      // Style header baris ke-10 (index 9) — baris header tabel
+      const headerRowIndex = 9; // 0-based
+      const headerCols = 13;
+      for (let c = 0; c < headerCols; c++) {
+        const cellAddr = XLSX.utils.encode_cell({ r: headerRowIndex, c });
+        if (!ws[cellAddr]) ws[cellAddr] = { v: '', t: 's' };
+        ws[cellAddr].s = {
+          font: { bold: true, color: { rgb: 'FFFFFF' } },
+          fill: { fgColor: { rgb: '166534' } }, // emerald-800
+          alignment: { horizontal: 'center', wrapText: true },
+          border: {
+            top: { style: 'thin', color: { rgb: '000000' } },
+            bottom: { style: 'thin', color: { rgb: '000000' } },
+            left: { style: 'thin', color: { rgb: '000000' } },
+            right: { style: 'thin', color: { rgb: '000000' } },
+          },
+        };
+      }
+
+      // Style baris data + border tipis
+      const dataStartRow = headerRowIndex + 1;
+      const dataEndRow = dataStartRow + filteredAttempts.length - 1;
+      for (let r = dataStartRow; r <= dataEndRow; r++) {
+        const isEven = (r - dataStartRow) % 2 === 0;
+        for (let c = 0; c < headerCols; c++) {
+          const cellAddr = XLSX.utils.encode_cell({ r, c });
+          if (!ws[cellAddr]) ws[cellAddr] = { v: '', t: 's' };
+          ws[cellAddr].s = {
+            fill: { fgColor: { rgb: isEven ? 'F0FDF4' : 'FFFFFF' } }, // hijau muda / putih bergantian
+            alignment: { horizontal: c === 0 ? 'center' : 'left', wrapText: false },
+            border: {
+              top: { style: 'thin', color: { rgb: 'D1FAE5' } },
+              bottom: { style: 'thin', color: { rgb: 'D1FAE5' } },
+              left: { style: 'thin', color: { rgb: 'D1FAE5' } },
+              right: { style: 'thin', color: { rgb: 'D1FAE5' } },
+            },
+          };
+        }
+        // Kolom nilai (index 6) — warna merah jika belum tuntas
+        const nilaiCell = XLSX.utils.encode_cell({ r, c: 6 });
+        const nilaiVal = filteredAttempts[r - dataStartRow]?.score ?? 0;
+        if (ws[nilaiCell]) {
+          ws[nilaiCell].s = {
+            ...ws[nilaiCell].s,
+            font: { bold: true, color: { rgb: nilaiVal >= kkmThreshold ? '166534' : 'DC2626' } },
+          };
+        }
+      }
+
+      // Style judul utama (row 0)
+      const titleCell = XLSX.utils.encode_cell({ r: 0, c: 0 });
+      if (ws[titleCell]) {
+        ws[titleCell].s = {
+          font: { bold: true, sz: 14, color: { rgb: '14532D' } },
+          alignment: { horizontal: 'center' },
+        };
+      }
+
+      XLSX.utils.book_append_sheet(wb, ws, 'Daftar Nilai Kuis');
     } else {
-      const exportData = filteredAggregatedGrades.map((g, idx) => ({
-        No: idx + 1,
-        ID_Siswa: g.studentId,
-        Nama_Siswa: g.studentName,
-        NISN: g.nisn,
-        Kelas: g.className,
-        Mata_Pelajaran: 'Dasar-Dasar Agribisnis Tanaman',
-        Rata_Tugas: g.assignmentAverage,
-        Rata_Kuis: g.quizAverage,
-        Nilai_Akhir: g.finalScore,
-        Status: g.status,
-        Catatan_Guru: g.notes || '-',
-      }));
+      // ── Sheet: Rekap Rapor Berbobot ───────────────────────────────────────
+      const sheetData: (string | number)[][] = [
+        ['REKAP RAPOR NILAI BERBOBOT SISWA'],
+        ['SMK ATPH – Dasar-Dasar Agribisnis Tanaman'],
+        ['Tahun Ajaran: 2025/2026'],
+        [],
+        ['Administrator', ':', 'Okta Nofiyanto'],
+        ['Nama Guru', ':', namaGuruInput || 'Okta Nofiyanto, S.P.'],
+        ['Tanggal Cetak', ':', tanggalCetak],
+        [`Bobot Tugas: ${assignmentWeight}%  |  Bobot Kuis: ${quizWeight}%  |  KKM: ${kkmThreshold}`, '', ''],
+        [],
+        [
+          'No',
+          'Nama Siswa',
+          'NISN',
+          'Kelas',
+          'Mata Pelajaran',
+          `Rata-rata Tugas (${assignmentWeight}%)`,
+          `Rata-rata Kuis (${quizWeight}%)`,
+          'Nilai Akhir',
+          'Status',
+          'Catatan Guru',
+        ],
+        ...filteredAggregatedGrades.map((g, idx) => [
+          idx + 1,
+          g.studentName,
+          g.nisn || '-',
+          g.className || '-',
+          'Dasar-Dasar Agribisnis Tanaman',
+          g.assignmentAverage,
+          g.quizAverage,
+          g.finalScore,
+          g.status,
+          g.notes || '-',
+        ]),
+      ];
 
-      exportToCSV(`Rekap_Nilai_Rapor_ATPH_${new Date().toISOString().slice(0, 10)}.csv`, exportData);
+      const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+      ws['!cols'] = [
+        { wch: 5 },  // No
+        { wch: 28 }, // Nama Siswa
+        { wch: 16 }, // NISN
+        { wch: 12 }, // Kelas
+        { wch: 36 }, // Mata Pelajaran
+        { wch: 20 }, // Rata Tugas
+        { wch: 20 }, // Rata Kuis
+        { wch: 12 }, // Nilai Akhir
+        { wch: 22 }, // Status
+        { wch: 30 }, // Catatan
+      ];
+
+      ws['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 9 } },
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 9 } },
+        { s: { r: 2, c: 0 }, e: { r: 2, c: 9 } },
+        { s: { r: 7, c: 0 }, e: { r: 7, c: 9 } },
+      ];
+
+      const headerRowIndex = 9;
+      const headerCols = 10;
+      for (let c = 0; c < headerCols; c++) {
+        const cellAddr = XLSX.utils.encode_cell({ r: headerRowIndex, c });
+        if (!ws[cellAddr]) ws[cellAddr] = { v: '', t: 's' };
+        ws[cellAddr].s = {
+          font: { bold: true, color: { rgb: 'FFFFFF' } },
+          fill: { fgColor: { rgb: '1E40AF' } }, // blue-800
+          alignment: { horizontal: 'center', wrapText: true },
+          border: {
+            top: { style: 'thin', color: { rgb: '000000' } },
+            bottom: { style: 'thin', color: { rgb: '000000' } },
+            left: { style: 'thin', color: { rgb: '000000' } },
+            right: { style: 'thin', color: { rgb: '000000' } },
+          },
+        };
+      }
+
+      const dataStartRow = headerRowIndex + 1;
+      const dataEndRow = dataStartRow + filteredAggregatedGrades.length - 1;
+      for (let r = dataStartRow; r <= dataEndRow; r++) {
+        const isEven = (r - dataStartRow) % 2 === 0;
+        for (let c = 0; c < headerCols; c++) {
+          const cellAddr = XLSX.utils.encode_cell({ r, c });
+          if (!ws[cellAddr]) ws[cellAddr] = { v: '', t: 's' };
+          ws[cellAddr].s = {
+            fill: { fgColor: { rgb: isEven ? 'EFF6FF' : 'FFFFFF' } }, // biru muda / putih
+            alignment: { horizontal: c === 0 ? 'center' : 'left' },
+            border: {
+              top: { style: 'thin', color: { rgb: 'BFDBFE' } },
+              bottom: { style: 'thin', color: { rgb: 'BFDBFE' } },
+              left: { style: 'thin', color: { rgb: 'BFDBFE' } },
+              right: { style: 'thin', color: { rgb: 'BFDBFE' } },
+            },
+          };
+        }
+        // Nilai Akhir (kolom 7) — bold + warna
+        const nilaiCell = XLSX.utils.encode_cell({ r, c: 7 });
+        const nilaiVal = filteredAggregatedGrades[r - dataStartRow]?.finalScore ?? 0;
+        if (ws[nilaiCell]) {
+          ws[nilaiCell].s = {
+            ...ws[nilaiCell].s,
+            font: { bold: true, color: { rgb: nilaiVal >= kkmThreshold ? '1E40AF' : 'DC2626' } },
+          };
+        }
+      }
+
+      const titleCell = XLSX.utils.encode_cell({ r: 0, c: 0 });
+      if (ws[titleCell]) {
+        ws[titleCell].s = {
+          font: { bold: true, sz: 14, color: { rgb: '1E3A8A' } },
+          alignment: { horizontal: 'center' },
+        };
+      }
+
+      XLSX.utils.book_append_sheet(wb, ws, 'Rekap Rapor Berbobot');
     }
+
+    const filename =
+      activeTab === 'attempts'
+        ? `Nilai_Kuis_ATPH_${new Date().toISOString().slice(0, 10)}.xlsx`
+        : `Rapor_Berbobot_ATPH_${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+    XLSX.writeFile(wb, filename, { bookType: 'xlsx', type: 'binary', cellStyles: true });
+    setShowExportModal(false);
   };
 
   return (
@@ -392,10 +626,10 @@ export default function AdminGradesPage() {
 
           {/* Tombol Ekspor Excel */}
           <button
-            onClick={handleExportAttemptsCSV}
+            onClick={() => setShowExportModal(true)}
             className="px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 transition-all hover:scale-[1.01] cursor-pointer whitespace-nowrap"
           >
-            <Download className="w-4 h-4" />
+            <FileSpreadsheet className="w-4 h-4" />
             <span>Ekspor Excel ({activeTab === 'attempts' ? 'Daftar Kuis' : 'Rapor'})</span>
           </button>
         </div>
@@ -808,6 +1042,87 @@ export default function AdminGradesPage() {
               >
                 Tutup Jendela
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL EKSPOR EXCEL ──────────────────────────────────────────────── */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            {/* Header Modal */}
+            <div className="flex items-center justify-between px-6 py-4 bg-emerald-600 text-white">
+              <div className="flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5" />
+                <h3 className="text-sm font-bold">Ekspor Excel – Rekap Nilai</h3>
+              </div>
+              <button
+                onClick={() => setShowExportModal(false)}
+                className="p-1 rounded-lg hover:bg-white/20 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body Modal */}
+            <div className="p-6 space-y-5">
+              {/* Info dokumen */}
+              <div className="rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 p-4 space-y-1.5 text-xs text-slate-700 dark:text-slate-300">
+                <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold mb-1">
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Informasi Dokumen</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Jenis Ekspor</span>
+                  <span className="font-semibold">{activeTab === 'attempts' ? 'Daftar Nilai Kuis' : 'Rekap Rapor Berbobot'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Jumlah Data</span>
+                  <span className="font-semibold">{activeTab === 'attempts' ? filteredAttempts.length : filteredAggregatedGrades.length} baris</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Administrator</span>
+                  <span className="font-semibold">Okta Nofiyanto</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Tanggal Cetak</span>
+                  <span className="font-semibold">{new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
+                </div>
+              </div>
+
+              {/* Input Nama Guru */}
+              <div>
+                <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">
+                  <User className="w-3.5 h-3.5 text-emerald-600" />
+                  Nama Guru / Wali Kelas
+                </label>
+                <input
+                  type="text"
+                  value={namaGuru}
+                  onChange={(e) => setNamaGuru(e.target.value)}
+                  placeholder="Contoh: Okta Nofiyanto, S.P."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                />
+                <p className="mt-1 text-[10px] text-slate-400">Nama ini akan tercantum dalam file Excel yang diunduh.</p>
+              </div>
+
+              {/* Tombol aksi */}
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={() => setShowExportModal(false)}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  onClick={() => handleExportExcel(namaGuru)}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 transition-all cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Unduh .xlsx
+                </button>
+              </div>
             </div>
           </div>
         </div>
