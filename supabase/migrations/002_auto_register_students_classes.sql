@@ -9,7 +9,68 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- 2. TABEL: classes (Rombongan Belajar ATPH)
+-- ====================================================================
+-- 2. PENYESUAIAN TIPE DATA (MENGUBAH UUID KE TEXT SECARA AMAN)
+-- ====================================================================
+DO $$ 
+DECLARE
+    r RECORD;
+BEGIN
+    -- Lepas semua foreign key constraint lama yang mengikat classes(id)
+    FOR r IN (
+        SELECT tc.table_schema, tc.table_name, tc.constraint_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name
+        WHERE ccu.table_schema = 'public' 
+          AND ccu.table_name = 'classes' 
+          AND ccu.column_name = 'id' 
+          AND tc.constraint_type = 'FOREIGN KEY'
+    ) LOOP
+        EXECUTE 'ALTER TABLE ' || quote_ident(r.table_schema) || '.' || quote_ident(r.table_name) || ' DROP CONSTRAINT IF EXISTS ' || quote_ident(r.constraint_name) || ' CASCADE;';
+    END LOOP;
+
+    -- Ubah tipe kolom id di tabel classes menjadi TEXT jika sebelumnya UUID
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = 'classes' AND column_name = 'id' AND data_type != 'text'
+    ) THEN
+        ALTER TABLE public.classes ALTER COLUMN id TYPE TEXT USING id::text;
+    END IF;
+
+    -- Ubah tipe kolom id dan class_id di tabel students jika sebelumnya UUID
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = 'students' AND column_name = 'id' AND data_type != 'text'
+    ) THEN
+        ALTER TABLE public.students ALTER COLUMN id TYPE TEXT USING id::text;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = 'students' AND column_name = 'class_id' AND data_type != 'text'
+    ) THEN
+        ALTER TABLE public.students ALTER COLUMN class_id TYPE TEXT USING class_id::text;
+    END IF;
+
+    -- Ubah tipe kolom di tabel class_students jika sebelumnya UUID
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = 'class_students' AND column_name = 'class_id' AND data_type != 'text'
+    ) THEN
+        ALTER TABLE public.class_students ALTER COLUMN class_id TYPE TEXT USING class_id::text;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = 'class_students' AND column_name = 'student_id' AND data_type != 'text'
+    ) THEN
+        ALTER TABLE public.class_students ALTER COLUMN student_id TYPE TEXT USING student_id::text;
+    END IF;
+END $$;
+
+-- ====================================================================
+-- 3. TABEL: classes (Rombel Belajar ATPH)
+-- ====================================================================
 CREATE TABLE IF NOT EXISTS public.classes (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -25,7 +86,7 @@ ALTER TABLE public.classes ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE public.classes ADD COLUMN IF NOT EXISTS academic_year VARCHAR(20) DEFAULT '2025/2026';
 ALTER TABLE public.classes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
 
--- Seed Rombel Kelas ATPH Standar (Tingkat X, XI, XII)
+-- Seed Data Rombel Kelas ATPH Standar (X, XI, XII)
 INSERT INTO public.classes (id, name, grade_level, description, academic_year)
 VALUES
   ('cls-x-at-1', 'X AT 1', 'X', 'Kelas 10 Agribisnis Tanaman 1 - Rombel Dasar Kejuruan ATPH', '2025/2026'),
@@ -43,7 +104,9 @@ ON CONFLICT (id) DO UPDATE SET
   description = EXCLUDED.description,
   academic_year = EXCLUDED.academic_year;
 
--- 3. TABEL: students (Identitas & Profil Siswa EduATPH)
+-- ====================================================================
+-- 4. TABEL: students (Identitas & Profil Siswa EduATPH)
+-- ====================================================================
 CREATE TABLE IF NOT EXISTS public.students (
   id TEXT PRIMARY KEY,
   auth_user_id UUID,
@@ -56,6 +119,7 @@ CREATE TABLE IF NOT EXISTS public.students (
   class_name TEXT DEFAULT 'X AT 1',
   major TEXT NOT NULL DEFAULT 'Agribisnis Tanaman Pangan dan Hortikultura',
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'nonaktif', 'alumni', 'pindah')),
+  role TEXT NOT NULL DEFAULT 'student',
   avatar_url TEXT DEFAULT 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=250&q=80',
   phone_number TEXT,
   last_login_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
@@ -70,18 +134,20 @@ ALTER TABLE public.students ADD COLUMN IF NOT EXISTS class_id TEXT;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS class_name TEXT DEFAULT 'X AT 1';
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS major TEXT DEFAULT 'Agribisnis Tanaman Pangan dan Hortikultura';
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
+ALTER TABLE public.students ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'student';
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=250&q=80';
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS phone_number TEXT;
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
 ALTER TABLE public.students ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
 
--- Indeks Pencarian Cepat
 CREATE INDEX IF NOT EXISTS idx_students_email ON public.students(email);
 CREATE INDEX IF NOT EXISTS idx_students_nis ON public.students(nis);
 CREATE INDEX IF NOT EXISTS idx_students_class_id ON public.students(class_id);
 CREATE INDEX IF NOT EXISTS idx_students_status ON public.students(status);
 
--- 4. TABEL: class_students (Relasi Siswa dengan Rombel Kelas)
+-- ====================================================================
+-- 5. TABEL: class_students (Relasi Siswa dengan Rombel)
+-- ====================================================================
 CREATE TABLE IF NOT EXISTS public.class_students (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   class_id TEXT NOT NULL REFERENCES public.classes(id) ON DELETE CASCADE,
@@ -95,7 +161,9 @@ CREATE TABLE IF NOT EXISTS public.class_students (
 CREATE INDEX IF NOT EXISTS idx_class_students_class ON public.class_students(class_id);
 CREATE INDEX IF NOT EXISTS idx_class_students_student ON public.class_students(student_id);
 
--- 5. TABEL: assessments (Rekapitulasi Penilaian Kuis Siswa)
+-- ====================================================================
+-- 6. TABEL: assessments (Rekap Penilaian Kuis Siswa)
+-- ====================================================================
 CREATE TABLE IF NOT EXISTS public.assessments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   student_id TEXT,
@@ -128,92 +196,46 @@ CREATE INDEX IF NOT EXISTS idx_assessments_student_id ON public.assessments(stud
 CREATE INDEX IF NOT EXISTS idx_assessments_quiz_id ON public.assessments(quiz_id);
 CREATE INDEX IF NOT EXISTS idx_assessments_created_at ON public.assessments(created_at DESC);
 
--- 6. VIEW: class_students_overview (Rekap Siswa per Kelas untuk Dashboard Guru)
-CREATE OR REPLACE VIEW public.class_students_overview AS
-SELECT
-  c.id AS class_id,
-  c.name AS class_name,
-  c.grade_level,
-  c.academic_year,
-  COUNT(s.id) FILTER (WHERE s.status = 'active') AS active_students_count,
-  COUNT(s.id) AS total_students_count
-FROM public.classes c
-LEFT JOIN public.students s ON s.class_id = c.id
-GROUP BY c.id, c.name, c.grade_level, c.academic_year
-ORDER BY c.grade_level, c.name;
-
+-- ====================================================================
 -- 7. ROW LEVEL SECURITY (RLS) POLICIES
+-- ====================================================================
 ALTER TABLE public.classes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.students ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.class_students ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.assessments ENABLE ROW LEVEL SECURITY;
 
--- Policy classes: Siapapun dapat membaca daftar kelas, Admin dapat memodifikasi
-DROP POLICY IF EXISTS "Public and authenticated can read classes" ON public.classes;
-CREATE POLICY "Public and authenticated can read classes"
-ON public.classes FOR SELECT
-USING (true);
+DROP POLICY IF EXISTS "Allow read classes" ON public.classes;
+CREATE POLICY "Allow read classes" ON public.classes FOR SELECT USING (true);
 
-DROP POLICY IF EXISTS "Admin and service role can manage classes" ON public.classes;
-CREATE POLICY "Admin and service role can manage classes"
-ON public.classes FOR ALL
-USING (true)
-WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow manage classes" ON public.classes;
+CREATE POLICY "Allow manage classes" ON public.classes FOR ALL USING (true) WITH CHECK (true);
 
--- Policy students: Siswa dapat membaca profil dan auto-register/update login
-DROP POLICY IF EXISTS "Public and students can read students" ON public.students;
-CREATE POLICY "Public and students can read students"
-ON public.students FOR SELECT
-USING (true);
+DROP POLICY IF EXISTS "Allow read students" ON public.students;
+CREATE POLICY "Allow read students" ON public.students FOR SELECT USING (true);
 
-DROP POLICY IF EXISTS "Public and students can insert students" ON public.students;
-CREATE POLICY "Public and students can insert students"
-ON public.students FOR INSERT
-WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow insert students" ON public.students;
+CREATE POLICY "Allow insert students" ON public.students FOR INSERT WITH CHECK (true);
 
-DROP POLICY IF EXISTS "Public and students can update own profile" ON public.students;
-CREATE POLICY "Public and students can update own profile"
-ON public.students FOR UPDATE
-USING (true)
-WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow update students" ON public.students;
+CREATE POLICY "Allow update students" ON public.students FOR UPDATE USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "Admin and service role full access students" ON public.students;
-CREATE POLICY "Admin and service role full access students"
-ON public.students FOR ALL
-USING (true)
-WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow manage students" ON public.students;
+CREATE POLICY "Allow manage students" ON public.students FOR ALL USING (true) WITH CHECK (true);
 
--- Policy class_students: Read and insert allowed
-DROP POLICY IF EXISTS "Public and authenticated can read class_students" ON public.class_students;
-CREATE POLICY "Public and authenticated can read class_students"
-ON public.class_students FOR SELECT
-USING (true);
+DROP POLICY IF EXISTS "Allow read class_students" ON public.class_students;
+CREATE POLICY "Allow read class_students" ON public.class_students FOR SELECT USING (true);
 
-DROP POLICY IF EXISTS "Public and authenticated can insert class_students" ON public.class_students;
-CREATE POLICY "Public and authenticated can insert class_students"
-ON public.class_students FOR INSERT
-WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow insert class_students" ON public.class_students;
+CREATE POLICY "Allow insert class_students" ON public.class_students FOR INSERT WITH CHECK (true);
 
-DROP POLICY IF EXISTS "Admin and service role full access class_students" ON public.class_students;
-CREATE POLICY "Admin and service role full access class_students"
-ON public.class_students FOR ALL
-USING (true)
-WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow manage class_students" ON public.class_students;
+CREATE POLICY "Allow manage class_students" ON public.class_students FOR ALL USING (true) WITH CHECK (true);
 
--- Policy assessments: Siswa dapat membaca dan mencatat hasil kuis
-DROP POLICY IF EXISTS "Public and students can read assessments" ON public.assessments;
-CREATE POLICY "Public and students can read assessments"
-ON public.assessments FOR SELECT
-USING (true);
+DROP POLICY IF EXISTS "Allow read assessments" ON public.assessments;
+CREATE POLICY "Allow read assessments" ON public.assessments FOR SELECT USING (true);
 
-DROP POLICY IF EXISTS "Public and students can insert assessments" ON public.assessments;
-CREATE POLICY "Public and students can insert assessments"
-ON public.assessments FOR INSERT
-WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow insert assessments" ON public.assessments;
+CREATE POLICY "Allow insert assessments" ON public.assessments FOR INSERT WITH CHECK (true);
 
-DROP POLICY IF EXISTS "Admin and service role full access assessments" ON public.assessments;
-CREATE POLICY "Admin and service role full access assessments"
-ON public.assessments FOR ALL
-USING (true)
-WITH CHECK (true);
-
+DROP POLICY IF EXISTS "Allow manage assessments" ON public.assessments;
+CREATE POLICY "Allow manage assessments" ON public.assessments FOR ALL USING (true) WITH CHECK (true);
