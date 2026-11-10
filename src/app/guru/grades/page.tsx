@@ -13,8 +13,13 @@ import {
   Database,
   X,
   FileCheck2,
+  FileSpreadsheet,
+  Download,
+  Printer,
+  User,
 } from 'lucide-react';
-import { formatDate } from '@/lib/utils';
+import * as XLSX from 'xlsx';
+import { formatDate, formatDateOnly } from '@/lib/utils';
 
 interface ServerQuizAttempt {
   id: string;
@@ -42,6 +47,8 @@ export default function GuruGradesPage() {
   const [selectedAttemptModal, setSelectedAttemptModal] = useState<ServerQuizAttempt | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [namaGuru, setNamaGuru] = useState('Okta Nofiyanto, S.P.');
 
   const loadData = useCallback(async () => {
     setIsRefreshing(true);
@@ -77,6 +84,86 @@ export default function GuruGradesPage() {
 
     return matchesSearch && matchesClass;
   });
+
+  const handleExportExcel = (namaGuruInput: string) => {
+    const tanggalCetak = new Date().toLocaleString('id-ID', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const wb = XLSX.utils.book_new();
+    const sheetData: (string | number)[][] = [
+      ['REKAP NILAI KUIS SISWA (PORTAL GURU)'],
+      ['SMK ATPH – Dasar-Dasar Agribisnis Tanaman'],
+      ['Tahun Ajaran: 2025/2026'],
+      [],
+      ['Administrator', ':', 'Okta Nofiyanto'],
+      ['Nama Guru', ':', namaGuruInput || 'Okta Nofiyanto, S.P.'],
+      ['Tanggal Cetak', ':', tanggalCetak],
+      ['KKM', ':', 75],
+      [],
+      [
+        'No',
+        'Nama Siswa',
+        'NISN',
+        'Kelas',
+        'Mata Pelajaran',
+        'Nama Kuis / Materi',
+        'Nilai',
+        'Jawaban Benar',
+        'Jawaban Salah',
+        'Tanggal Pengerjaan',
+        'Waktu Pengerjaan',
+        'Status',
+      ],
+      ...filteredAttempts.map((att, idx) => [
+        idx + 1,
+        att.studentName,
+        att.studentNisn || '-',
+        att.className || '-',
+        'Dasar-Dasar Agribisnis Tanaman',
+        att.quizTitle,
+        att.percentage ?? att.score,
+        att.correctCount,
+        att.wrongCount,
+        formatDateOnly(att.completedAt || att.startedAt),
+        formatDate(att.completedAt || att.startedAt),
+        att.isPassed ? 'Tuntas' : 'Belum Tuntas (Remidi)',
+      ]),
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet(sheetData);
+    ws['!cols'] = [
+      { wch: 5 },
+      { wch: 28 },
+      { wch: 16 },
+      { wch: 12 },
+      { wch: 36 },
+      { wch: 32 },
+      { wch: 8 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 20 },
+      { wch: 22 },
+      { wch: 24 },
+    ];
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 11 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 11 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 11 } },
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Daftar Nilai Kuis');
+    XLSX.writeFile(wb, `Nilai_Kuis_Guru_ATPH_${new Date().toISOString().slice(0, 10)}.xlsx`, {
+      bookType: 'xlsx',
+      type: 'binary',
+      cellStyles: true,
+    });
+    setShowExportModal(false);
+  };
 
   return (
     <div className="flex-1 flex flex-col">
@@ -115,14 +202,21 @@ export default function GuruGradesPage() {
             </select>
           </div>
 
-          <div className="text-xs font-bold text-slate-500 flex items-center gap-2">
+          <div className="text-xs font-bold text-slate-500 flex items-center gap-3">
             <span>{filteredAttempts.length} Penilaian Kuis</span>
             <button
               onClick={loadData}
               disabled={isRefreshing}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 cursor-pointer"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
+            <button
+              onClick={() => setShowExportModal(true)}
+              className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 flex items-center gap-2 shadow-md shadow-emerald-600/20 cursor-pointer"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Ekspor Excel</span>
             </button>
           </div>
         </div>
@@ -290,6 +384,77 @@ export default function GuruGradesPage() {
               >
                 Tutup Lembar Jawaban
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL EKSPOR EXCEL */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 bg-emerald-600 text-white">
+              <div className="flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5" />
+                <h3 className="text-sm font-bold">Ekspor Excel – Rekap Nilai Guru</h3>
+              </div>
+              <button
+                onClick={() => setShowExportModal(false)}
+                className="p-1 rounded-lg hover:bg-white/20 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              <div className="rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 p-4 space-y-1.5 text-xs text-slate-700 dark:text-slate-300">
+                <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold mb-1">
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Informasi Dokumen</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Jumlah Data</span>
+                  <span className="font-semibold">{filteredAttempts.length} baris</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Administrator</span>
+                  <span className="font-semibold">Okta Nofiyanto</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Tanggal Cetak</span>
+                  <span className="font-semibold">{new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">
+                  <User className="w-3.5 h-3.5 text-emerald-600" />
+                  Nama Guru Pengampu
+                </label>
+                <input
+                  type="text"
+                  value={namaGuru}
+                  onChange={(e) => setNamaGuru(e.target.value)}
+                  placeholder="Contoh: Okta Nofiyanto, S.P."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={() => setShowExportModal(false)}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  onClick={() => handleExportExcel(namaGuru)}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Unduh .xlsx
+                </button>
+              </div>
             </div>
           </div>
         </div>
