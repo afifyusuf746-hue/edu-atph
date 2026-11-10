@@ -479,8 +479,11 @@ export const DataProvider = {
       .map((sm) => {
         const initMatch = INITIAL_MATERIALS.find((im) => im.id === sm.id);
         if (initMatch) {
-          // Sync Bab IV to full content & complete attachments from INITIAL_MATERIALS
-          if (initMatch.id === 'mat-bab-iv-pengelolaan-faktor-produksi-x') {
+          // Sync Bab IV & Hidroponik Kelas XI to full content & complete attachments from INITIAL_MATERIALS
+          if (
+            initMatch.id === 'mat-bab-iv-pengelolaan-faktor-produksi-x' ||
+            initMatch.id === 'mat-hidroponik-xi'
+          ) {
             if (sm.content !== initMatch.content || sm.updatedAt !== initMatch.updatedAt || !sm.content) {
               hasChanges = true;
               return {
@@ -522,7 +525,11 @@ export const DataProvider = {
     const found = list.find((m) => m.id === id || m.slug === id);
     if (found) {
       const initMatch = INITIAL_MATERIALS.find((im) => im.id === found.id);
-      if (initMatch && initMatch.id === 'mat-bab-iv-pengelolaan-faktor-produksi-x') {
+      if (
+        initMatch &&
+        (initMatch.id === 'mat-bab-iv-pengelolaan-faktor-produksi-x' ||
+          initMatch.id === 'mat-hidroponik-xi')
+      ) {
         if (found.content !== initMatch.content || found.updatedAt !== initMatch.updatedAt) {
           return initMatch;
         }
@@ -865,26 +872,64 @@ export const DataProvider = {
 
     let score = 0;
     let maxScore = 0;
+    let mcqCorrectCount = 0;
+    let mcqTotalCount = 0;
+    let hasEssayOrCaseStudy = false;
 
     const evaluatedAnswers = answers.map((ans) => {
       const q = questions.find((item) => item.id === ans.questionId);
-      const points = q ? q.points : 20;
+      const qType = q?.questionType || 'multiple_choice';
+      if (qType === 'essay' || qType === 'case_study') {
+        hasEssayOrCaseStudy = true;
+        return {
+          questionId: ans.questionId,
+          questionType: qType,
+          questionText: q?.questionText || '',
+          userAnswer: ans.userAnswer,
+          isCorrect: undefined,
+          pointsAwarded: undefined,
+          aiScore: null,
+          aiRubricBreakdown: null,
+          aiReasoning: null,
+          aiImprovement: null,
+          teacherScore: null, // "Belum dinilai"
+          teacherNote: null,
+        };
+      }
+
+      mcqTotalCount++;
+      const points = q ? q.points : 1;
       maxScore += points;
 
-      const isCorrect = q && ans.userAnswer.trim().toLowerCase() === q.correctAnswer.trim().toLowerCase();
+      const isCorrect = Boolean(
+        q &&
+        q.correctAnswer &&
+        ans.userAnswer.trim().toLowerCase() === q.correctAnswer.trim().toLowerCase()
+      );
       if (isCorrect) {
         score += points;
+        mcqCorrectCount++;
       }
       return {
         questionId: ans.questionId,
+        questionType: qType,
+        questionText: q?.questionText || '',
         userAnswer: ans.userAnswer,
         isCorrect,
-        pointsAwarded: isCorrect ? points : 0,
+        pointsAwarded: isCorrect ? 1 : 0,
       };
     });
 
-    const percentage = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
-    const passed = percentage >= (quiz?.passingScore || 75);
+    // Sesuai spesifikasi: Nilai pilihan ganda = jumlah jawaban benar ÷ 10 × 100 (untuk kuis Hidroponik XI)
+    const isHidroponikXI = quizId === 'quiz-hidroponik-xi' || hasEssayOrCaseStudy;
+    const mcqScore = isHidroponikXI
+      ? Math.round((mcqCorrectCount / 10) * 100 * 100) / 100
+      : maxScore > 0
+      ? Math.round((score / maxScore) * 100)
+      : 0;
+
+    const percentage = isHidroponikXI ? Math.min(100, Math.round(mcqScore * 0.3)) : mcqScore;
+    const passed = !hasEssayOrCaseStudy && percentage >= (quiz?.passingScore || 75);
 
     const attempts = this.getQuizAttempts();
     const priorAttemptsCount = attempts.filter((a) => a.quizId === quizId && a.studentId === studentId).length;
@@ -895,15 +940,24 @@ export const DataProvider = {
       quizTitle: quiz?.title || 'Kuis ATPH',
       studentId,
       studentName: user?.fullName || 'Siswa',
-      className: user?.className || 'X ATPH',
+      className: user?.className || 'XI AT 1',
       startedAt: new Date(Date.now() - 15 * 60000).toISOString(),
       completedAt: new Date().toISOString(),
       answers: evaluatedAnswers,
-      score,
-      maxScore,
+      score: mcqScore,
+      maxScore: 100,
       percentage,
       passed,
       attemptNumber: priorAttemptsCount + 1,
+      mcqCorrectCount,
+      mcqTotalCount,
+      mcqScore,
+      essayAverageScore: null,
+      caseStudyAverageScore: null,
+      finalWeightedScore: null,
+      weightsConfig: quiz?.weightsConfig || { mcqWeight: 30, essayWeight: 40, caseStudyWeight: 30 },
+      gradingStatus: hasEssayOrCaseStudy ? 'pending_grading' : 'graded',
+      isPublished: !hasEssayOrCaseStudy,
     };
 
     attempts.unshift(newAttempt);

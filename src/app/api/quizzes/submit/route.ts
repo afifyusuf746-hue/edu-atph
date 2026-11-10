@@ -1,9 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { INITIAL_QUIZZES, INITIAL_QUIZ_QUESTIONS } from '@/lib/mock-data';
+import {
+  getServerSessionUser,
+  isTeacherOrAdmin,
+  getQuizSettings,
+  calculateWeightedEvaluation,
+  saveEvaluationAttempt,
+  sanitizeAttemptForStudent,
+  getExamSession,
+  getEvaluationAttemptById,
+  completeExamSessionOnSubmit,
+} from '@/lib/quiz-evaluation-store';
+import { QuizAnswer } from '@/types';
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ngreirksuoraurufzftn.supabase.co';
-const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_Tj16Oq3f9BqbVj35Le-7bQ_avuh1PjD';
+const SUPABASE_URL =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ngreirksuoraurufzftn.supabase.co';
+const SUPABASE_KEY =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_Tj16Oq3f9BqbVj35Le-7bQ_avuh1PjD';
 
 function resolveRombel(className?: string | null): { classId: string; className: string } {
   const norm = (className || '').trim().toUpperCase();
@@ -51,10 +65,12 @@ function resolveRombel(className?: string | null): { classId: string; className:
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
+    const sessionUser = getServerSessionUser(req);
+
     const {
       quizId,
-      studentId,
-      studentName,
+      studentId: bodyStudentId,
+      studentName: bodyStudentName,
       studentNisn,
       studentEmail,
       className,
@@ -62,47 +78,124 @@ export async function POST(req: NextRequest) {
       startedAt,
     } = body;
 
-    // 1. Validasi input
+    const studentId = bodyStudentId || sessionUser?.id;
+    const studentName = bodyStudentName || sessionUser?.fullName;
+
+    // 1. Validasi input & kepemilikan sesi siswa
     if (!quizId) {
       return NextResponse.json({ error: 'ID Kuis tidak valid' }, { status: 400 });
     }
     if (!studentId || !studentName) {
       return NextResponse.json({ error: 'Siswa belum terautentikasi' }, { status: 401 });
     }
+    if (
+      sessionUser &&
+      sessionUser.role === 'student' &&
+      bodyStudentId &&
+      bodyStudentId !== sessionUser.id
+    ) {
+      return NextResponse.json(
+        { error: 'Akses ditolak: Tidak dapat mengirimkan jawaban atas nama siswa lain.' },
+        { status: 403 }
+      );
+    }
 
     // 2. Temukan quiz & pertanyaan resmi
     const quiz = INITIAL_QUIZZES.find((q) => q.id === quizId);
     const quizTitle = quiz?.title || 'Kuis Evaluasi ATPH';
     const passingScore = quiz?.passingScore || 75;
+    const settings = getQuizSettings(quizId);
 
-    const questions = INITIAL_QUIZ_QUESTIONS.filter((q) => q.quizId === quizId);
+    const questions = INITIAL_QUIZ_QUESTIONS.filter((q) => q.quizId === quizId).sort(
+      (a, b) => a.orderIndex - b.orderIndex
+    );
 
-    // 3. Evaluasi jawaban secara aman di sisi server
-    let score = 0;
-    let maxScore = 0;
+    // 2b. Periksa sesi ujian aktif / terkunci (Mode Ujian Terkontrol)
+    const activeSession = getExamSession(quizId, studentId);
+    if (
+      activeSession &&
+      (activeSession.status === 'submitted' || activeSession.status === 'auto_submitted') &&
+      activeSession.attemptId
+    ) {
+      const existingLockedAttempt = await getEvaluationAttemptById(activeSession.attemptId);
+      if (existingLockedAttempt) {
+        const staffAccess = isTeacherOrAdmin(sessionUser);
+        const clientAttempt = staffAccess
+          ? existingLockedAttempt
+          : sanitizeAttemptForStudent(existingLockedAttempt, settings);
+        return NextResponse.json({
+          success: true,
+          alreadySubmitted: true,
+          synced: true,
+          attempt: clientAttempt,
+          message: activeSession.autoSubmitted
+            ? 'Sesi ujian telah dikumpulkan dan dikunci otomatis oleh sistem.'
+            : 'Jawaban ujian sudah pernah dikumpulkan sebelumnya.',
+        });
+      }
+    }
+
+    // 3. Evaluasi jawaban secara aman di sisi server (gabungkan draf server agar jawaban yang sudah diterima server tidak hilang)
+    let rawScore = 0;
+    let rawMaxScore = 0;
     let correctCount = 0;
     let wrongCount = 0;
+    let hasSubjectiveQuestions = false;
 
     const studentAnswersMap = new Map<string, string>();
+    if (activeSession?.draftAnswers) {
+      Object.entries(activeSession.draftAnswers).forEach(([qId, draftVal]) => {
+        if (typeof draftVal === 'string' && draftVal.trim().length > 0) {
+          studentAnswersMap.set(qId, draftVal.trim());
+        }
+      });
+    }
     if (Array.isArray(answers)) {
       answers.forEach((a: any) => {
-        studentAnswersMap.set(a.questionId, (a.userAnswer || '').trim());
+        const val = String(a.userAnswer ?? '').trim();
+        if (val.length > 0 || !studentAnswersMap.has(a.questionId)) {
+          studentAnswersMap.set(a.questionId, val);
+        }
       });
     }
 
-    const evaluatedAnswers = questions.map((q) => {
+    const evaluatedAnswers: QuizAnswer[] = questions.map((q) => {
       const userAnswer = studentAnswersMap.get(q.id) || '';
-      const points = q.points || 5;
-      maxScore += points;
+      const qType = q.questionType || 'multiple_choice';
+
+      if (qType === 'essay' || qType === 'case_study') {
+        hasSubjectiveQuestions = true;
+        return {
+          questionId: q.id,
+          questionType: qType,
+          questionText: q.questionText,
+          userAnswer,
+          correctAnswer: q.correctAnswer || '',
+          explanation: q.explanation || '',
+          aiScore: null,
+          aiRubricBreakdown: null,
+          aiReasoning: null,
+          aiImprovement: null,
+          aiGradedAt: null,
+          teacherScore: null, // "Belum dinilai", bukan 0
+          teacherNote: null,
+          gradedBy: null,
+          gradedAt: null,
+        };
+      }
+
+      // Pilihan Ganda / Benar-Salah: Benar = 1 poin, Salah = 0 poin
+      const points = q.points || 1;
+      rawMaxScore += points;
 
       const isCorrect = Boolean(
         userAnswer &&
-        q.correctAnswer &&
-        userAnswer.trim().toLowerCase() === q.correctAnswer.trim().toLowerCase()
+          q.correctAnswer &&
+          userAnswer.trim().toLowerCase() === q.correctAnswer.trim().toLowerCase()
       );
 
       if (isCorrect) {
-        score += points;
+        rawScore += points;
         correctCount++;
       } else {
         wrongCount++;
@@ -110,40 +203,92 @@ export async function POST(req: NextRequest) {
 
       return {
         questionId: q.id,
+        questionType: qType,
         questionText: q.questionText,
         userAnswer,
         correctAnswer: q.correctAnswer,
         isCorrect,
-        pointsAwarded: isCorrect ? points : 0,
+        pointsAwarded: isCorrect ? 1 : 0,
         explanation: q.explanation || '',
       };
     });
 
-    const percentage = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
-    const isPassed = percentage >= passingScore;
-    const attemptId = `att-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-    const nowIso = new Date().toISOString();
-    const startIso = startedAt || new Date(Date.now() - 15 * 60000).toISOString();
-    const durationSeconds = Math.max(1, Math.round((new Date(nowIso).getTime() - new Date(startIso).getTime()) / 1000));
+    const calc = calculateWeightedEvaluation(
+      evaluatedAnswers,
+      settings.weightsConfig,
+      passingScore
+    );
 
-    // Pastikan siswa terhubung dengan rombel kelas spesifik (X AT 1, X AT 2, dsb)
-    const rombel = resolveRombel(className);
+    const attemptId =
+      activeSession?.attemptId ||
+      `att-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    const nowIso = new Date().toISOString();
+    const startIso =
+      activeSession?.startedAt ||
+      startedAt ||
+      new Date(Date.now() - 15 * 60000).toISOString();
+    const durationSeconds = Math.max(
+      1,
+      Math.round((new Date(nowIso).getTime() - new Date(startIso).getTime()) / 1000)
+    );
+
+    const rombel = resolveRombel(className || activeSession?.className || quiz?.targetClassName);
     const resolvedClassId = rombel.classId;
     const resolvedClassName = rombel.className;
 
-    const attemptResult = {
+    // Jika memiliki soal Uraian/Studi Kasus, maka status awal adalah 'incomplete' ("Penilaian belum lengkap")
+    // dan isPublished = false (draf sampai diterbitkan guru).
+    const isPublished = !hasSubjectiveQuestions;
+    const effectivePercentage = hasSubjectiveQuestions
+      ? calc.mcqScore
+      : rawMaxScore > 0
+      ? Math.round((rawScore / rawMaxScore) * 100)
+      : 0;
+    const isPassed = !hasSubjectiveQuestions && effectivePercentage >= passingScore;
+
+    const sessionViolationCount = activeSession?.violationCount ?? Number(body.violationCount || 0);
+    const sessionViolationEvents = Array.isArray(activeSession?.violationEvents)
+      ? activeSession!.violationEvents
+      : Array.isArray(body.violationEvents)
+      ? body.violationEvents
+      : [];
+    const isAutoSubmitted = Boolean(activeSession?.autoSubmitted || body.autoSubmitted);
+
+    const fullAttemptRecord = {
       id: attemptId,
       quizId,
       quizTitle,
       studentId,
       studentName,
+      classId: resolvedClassId,
       className: resolvedClassName,
-      studentNisn: studentNisn || '-',
-      score: percentage,
+      studentNisn: studentNisn || activeSession?.studentNisn || sessionUser?.nisn || '-',
+      subjectName:
+        resolvedClassName.includes('XI') || quizId === 'quiz-hidroponik-xi'
+          ? 'Agribisnis Tanaman Pangan & Hortikultura'
+          : 'Dasar-Dasar Agribisnis Tanaman',
+      topic: quiz?.topic || 'Teknologi Budidaya Tanaman Sistem Hidroponik',
+      mcqCorrectCount: calc.mcqCorrectCount,
+      mcqTotalCount: calc.mcqTotalCount,
+      mcqScore: calc.mcqScore,
+      rawMcqFormula: calc.rawMcqFormula,
+      essayAverageScore: null,
+      caseStudyAverageScore: null,
+      finalWeightedScore: hasSubjectiveQuestions ? null : effectivePercentage,
+      weightsConfig: settings.weightsConfig,
+      gradingStatus: hasSubjectiveQuestions ? 'incomplete' : 'graded',
+      isPublished,
+      publishedAt: isPublished ? nowIso : null,
+      publishedBy: isPublished ? 'Sistem Otomatis' : null,
+      allowStudentReview: Boolean(settings.allowStudentReview || settings.isClosed),
+      teacherNotes: null,
+      gradedBy: null,
+      gradedAt: null,
+      score: effectivePercentage,
       maxScore: 100,
-      rawScore: score,
-      rawMaxScore: maxScore,
-      percentage,
+      rawScore,
+      rawMaxScore,
+      percentage: effectivePercentage,
       passed: isPassed,
       isPassed,
       correctCount,
@@ -152,213 +297,122 @@ export async function POST(req: NextRequest) {
       startedAt: startIso,
       completedAt: nowIso,
       submittedAt: nowIso,
-      status: 'graded' as const,
+      status: hasSubjectiveQuestions ? ('pending_grading' as const) : ('graded' as const),
+      violationCount: sessionViolationCount,
+      violationEvents: sessionViolationEvents,
+      autoSubmitted: isAutoSubmitted,
+      needsReview: sessionViolationCount > 0 || isAutoSubmitted,
+      examSessionStatus: isAutoSubmitted ? ('auto_submitted' as const) : ('submitted' as const),
+      resumedByTeacher: activeSession?.resumedByTeacher || null,
       answers: evaluatedAnswers,
     };
 
-    // 4. Simpan ke Supabase PostgreSQL
-    let synced = false;
-    let syncError: string | null = null;
-    let answersSaved = false;
-    let gradesSaved = false;
+    // Kunci sesi ujian agar pemantauan berhenti dan mencegah pengumpulan ganda
+    const finalDraftObj: Record<string, string> = {};
+    studentAnswersMap.forEach((v, k) => {
+      finalDraftObj[k] = v;
+    });
+    completeExamSessionOnSubmit({
+      quizId,
+      studentId,
+      attemptId,
+      finalDraftAnswers: finalDraftObj,
+    });
+
+    // 4. Simpan ke Local Store + Supabase melalui helper terpadu
+    const storeResult = await saveEvaluationAttempt(fullAttemptRecord);
+    let synced = storeResult.savedSupabase;
+    let syncError = storeResult.supabaseError || null;
     let studentSaved = false;
 
+    // Hubungkan siswa ke rombel kelas di Supabase jika koneksi tersedia
     try {
       const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
         auth: { persistSession: false },
       });
 
-      // A. Masukkan Siswa yang sudah mengerjakan kuis ke dalam Rombel Kelas di `students` & `class_students`
-      try {
-        const studentPayload: any = {
-          id: studentId,
-          full_name: studentName,
-          class_id: resolvedClassId,
-          class_name: resolvedClassName,
-          nis: studentNisn || '-',
-          nisn: studentNisn || '-',
-          status: 'active',
-          last_login_at: nowIso,
-        };
-        if (studentEmail) {
-          studentPayload.email = studentEmail.trim().toLowerCase();
-          studentPayload.username = studentEmail.split('@')[0];
-        }
-        const { error: stdErr } = await supabase.from('students').upsert(studentPayload, { onConflict: 'email' });
-        if (!stdErr) {
-          studentSaved = true;
-        }
-
-        // Hubungkan siswa ke rombel kelas di tabel class_students
-        try {
-          await supabase.from('class_students').upsert(
-            {
-              class_id: resolvedClassId,
-              student_id: studentId,
-              academic_year: '2025/2026',
-              status: 'active',
-            },
-            { onConflict: 'class_id,student_id' }
-          );
-        } catch {}
-      } catch (err: any) {
-        console.warn('Student rombel enrollment warning:', err?.message);
+      const studentPayload: any = {
+        id: studentId,
+        full_name: studentName,
+        class_id: resolvedClassId,
+        class_name: resolvedClassName,
+        nis: studentNisn || '-',
+        nisn: studentNisn || '-',
+        status: 'active',
+        last_login_at: nowIso,
+      };
+      if (studentEmail) {
+        studentPayload.email = studentEmail.trim().toLowerCase();
+        studentPayload.username = studentEmail.split('@')[0];
       }
+      const { error: stdErr } = await supabase
+        .from('students')
+        .upsert(studentPayload, { onConflict: 'email' });
+      if (!stdErr) studentSaved = true;
 
-      // B. Simpan data percobaan ke tabel `quiz_attempts`
-      const answersPayload = [
-        {
-          __meta: true,
-          classId: resolvedClassId,
-          className: resolvedClassName,
-          studentNisn: studentNisn || '-',
-          subjectName: 'Dasar-Dasar Agribisnis Tanaman',
-          topic: quiz?.topic || 'Pengelolaan Faktor Produksi',
-          correctCount,
-          wrongCount,
-          percentage,
-          totalQuestions: questions.length,
-          completedAt: nowIso,
-          startedAt: startIso,
-        },
-        ...evaluatedAnswers,
-      ];
-
-      // Insert ke quiz_attempts dengan kolom yang kompatibel
-      const { data: attemptData, error: attemptErr } = await supabase
-        .from('quiz_attempts')
-        .insert({
-          id: attemptId,
-          quiz_id: quizId,
-          quiz_title: quizTitle,
-          student_id: studentId,
-          student_name: studentName,
-          started_at: startIso,
-          completed_at: nowIso,
-          score: percentage,
-          max_score: 100,
-          is_passed: isPassed,
-          answers: answersPayload,
-          status: 'graded',
-        })
-        .select('*')
-        .single();
-
-      if (attemptErr) {
-        console.warn('Supabase quiz_attempts insert error:', attemptErr.message);
-        syncError = attemptErr.message;
-      } else if (attemptData) {
-        synced = true;
-      }
-
-      // C. Simpan rincian jawaban per nomor ke tabel `quiz_answers` jika tabel tersedia
       try {
-        const quizAnswersRows = evaluatedAnswers.map((ans) => ({
-          attempt_id: attemptId,
-          question_id: ans.questionId,
-          question_text: ans.questionText,
-          answer: ans.userAnswer,
-          correct_answer: ans.correctAnswer,
-          is_correct: ans.isCorrect,
-          points_awarded: ans.pointsAwarded,
-        }));
-
-        const { error: qAnsErr } = await supabase.from('quiz_answers').insert(quizAnswersRows);
-        if (!qAnsErr) answersSaved = true;
-      } catch (err: any) {
-        console.warn('quiz_answers insert non-fatal error:', err?.message);
-      }
-
-      // D. Simpan nilai ke tabel `grades` jika tabel tersedia
-      try {
-        const gradePayload: any = {
-          student_id: studentId,
-          student_name: studentName,
-          class_name: resolvedClassName,
-          quiz_id: quizId,
-          quiz_title: quizTitle,
-          attempt_id: attemptId,
-          score: percentage,
-          assessment_type: 'quiz',
-          subject_name: 'Dasar-Dasar Agribisnis Tanaman',
-          final_score: percentage,
-          quiz_average: percentage,
-          status: isPassed ? 'Tuntas' : 'Belum Tuntas',
-        };
-
-        const { error: grdErr } = await supabase.from('grades').insert(gradePayload);
-        if (!grdErr) gradesSaved = true;
-      } catch (err: any) {
-        console.warn('grades insert non-fatal error:', err?.message);
-      }
-
-      // E. Simpan ke tabel `assessments` (Permintaan Arsitektur EduATPH)
-      try {
-        await supabase.from('assessments').insert({
-          student_id: studentId,
-          student_name: studentName,
-          student_nis: studentNisn || '-',
-          class_name: resolvedClassName,
-          quiz_id: quizId,
-          quiz_title: quizTitle,
-          score: percentage,
-          max_score: 100,
-          is_passed: isPassed,
-          aspect_scores: {
-            correct_answers: correctCount,
-            incorrect_answers: wrongCount,
-            total_questions: questions.length,
-            topic: quiz?.topic || 'Pengelolaan Faktor Produksi',
-            duration_seconds: durationSeconds,
-            percentage,
-            completed_at: nowIso,
+        await supabase.from('class_students').upsert(
+          {
+            class_id: resolvedClassId,
+            student_id: studentId,
+            academic_year: '2025/2026',
+            status: 'active',
           },
-          notes: `Kuis ${quizTitle} - Skor: ${percentage}/100 (${isPassed ? 'Tuntas' : 'Remidi'})`,
-        });
-      } catch (err: any) {
-        console.warn('assessments insert non-fatal error:', err?.message);
+          { onConflict: 'class_id,student_id' }
+        );
+      } catch {}
+
+      if (!hasSubjectiveQuestions) {
+        try {
+          await supabase.from('assessments').insert({
+            student_id: studentId,
+            student_name: studentName,
+            student_nis: studentNisn || '-',
+            class_name: resolvedClassName,
+            quiz_id: quizId,
+            quiz_title: quizTitle,
+            score: effectivePercentage,
+            max_score: 100,
+            is_passed: isPassed,
+            aspect_scores: {
+              correct_answers: correctCount,
+              incorrect_answers: wrongCount,
+              total_questions: questions.length,
+              topic: quiz?.topic || 'Pengelolaan Faktor Produksi',
+              duration_seconds: durationSeconds,
+              percentage: effectivePercentage,
+              completed_at: nowIso,
+            },
+            notes: `Kuis ${quizTitle} - Skor: ${effectivePercentage}/100`,
+          });
+        } catch {}
       }
+    } catch {}
 
-      // F. Simpan juga ke tabel baru `edu_quiz_attempts`, `edu_quiz_answers`, `edu_grades` jika tabel tersedia
-      try {
-        await supabase.from('edu_quiz_attempts').insert({
-          score: percentage,
-          total_questions: questions.length,
-          correct_answers: correctCount,
-          wrong_answers: wrongCount,
-          started_at: startIso,
-          completed_at: nowIso,
-          status: 'completed',
-        });
-      } catch {}
-
-      try {
-        await supabase.from('edu_grades').insert({
-          grade_type: 'quiz',
-          score: percentage,
-          notes: `Kuis ${quizTitle} - Skor: ${percentage}/100 (${isPassed ? 'Tuntas' : 'Remidi'})`,
-        });
-      } catch {}
-
-    } catch (err: any) {
-      console.warn('Supabase connection error:', err.message);
-      syncError = err.message || 'Koneksi ke Supabase terputus';
-    }
+    // 5. KEAMANAN: Jangan pernah mengirim kunci jawaban (correctAnswer), rubrik, atau pembahasan
+    // melalui respons API siswa sebelum diizinkan!
+    const staffAccess = isTeacherOrAdmin(sessionUser);
+    const clientAttempt = staffAccess
+      ? fullAttemptRecord
+      : hasSubjectiveQuestions && !settings.allowStudentReview && !settings.isClosed
+      ? sanitizeAttemptForStudent(fullAttemptRecord, settings)
+      : fullAttemptRecord;
 
     return NextResponse.json({
       success: true,
-      synced,
+      synced: synced || storeResult.savedLocal,
       syncError,
-      answersSaved,
-      gradesSaved,
       studentSaved,
-      attempt: attemptResult,
-      message: synced
-        ? 'Jawaban kuis dan nilai berhasil disimpan ke server Supabase'
-        : 'Nilai dihitung berhasil (disimpan di perangkat, belum tersinkronisasi ke server)',
+      attempt: clientAttempt,
+      message: hasSubjectiveQuestions
+        ? 'Evaluasi berhasil dikumpulkan. Pilihan ganda telah dinilai otomatis; soal uraian dan studi kasus menunggu pemeriksaan dan publikasi guru.'
+        : 'Jawaban kuis dan nilai berhasil disimpan.',
     });
   } catch (err: any) {
     console.error('Quiz submission API error:', err);
-    return NextResponse.json({ error: err.message || 'Gagal memproses pengerjaan kuis' }, { status: 500 });
+    return NextResponse.json(
+      { error: err.message || 'Gagal memproses pengerjaan kuis' },
+      { status: 500 }
+    );
   }
 }

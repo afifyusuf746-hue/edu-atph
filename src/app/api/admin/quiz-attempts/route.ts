@@ -1,92 +1,123 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ngreirksuoraurufzftn.supabase.co';
-const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_Tj16Oq3f9BqbVj35Le-7bQ_avuh1PjD';
+import {
+  getServerSessionUser,
+  isTeacherOrAdmin,
+  canTeacherAccessClass,
+  listEvaluationAttempts,
+  listExamSessions,
+  getEvaluationAttemptById,
+  getQuizSettings,
+  sanitizeAttemptForStudent,
+} from '@/lib/quiz-evaluation-store';
 
 export async function GET(req: NextRequest) {
   try {
-    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-      auth: { persistSession: false },
-    });
-
     const { searchParams } = new URL(req.url);
+    const attemptId = searchParams.get('attemptId');
     const quizId = searchParams.get('quizId');
     const studentId = searchParams.get('studentId');
 
-    let query = supabase
-      .from('quiz_attempts')
-      .select('*')
-      .order('completed_at', { ascending: false });
+    const sessionUser = getServerSessionUser(req);
+    const staffAccess = isTeacherOrAdmin(sessionUser);
 
-    if (quizId) {
-      query = query.eq('quiz_id', quizId);
-    }
-    if (studentId) {
-      query = query.eq('student_id', studentId);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      return NextResponse.json({ success: false, error: error.message, data: [] }, { status: 500 });
-    }
-
-    // Format attempts and extract metadata
-    const attempts = (data || []).map((row: any) => {
-      let answersList: any[] = [];
-      let meta: any = {};
-
-      if (Array.isArray(row.answers)) {
-        const first = row.answers[0];
-        if (first && first.__meta) {
-          meta = first;
-          answersList = row.answers.slice(1);
-        } else {
-          answersList = row.answers;
-        }
+    // Pemeriksaan Hak Akses & Kepemilikan Data di Server:
+    // Siswa HANYA diizinkan mengakses jawaban miliknya sendiri.
+    if (!staffAccess) {
+      if (!sessionUser) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Tidak terautentikasi. Silakan login terlebih dahulu.',
+            data: [],
+          },
+          { status: 401 }
+        );
       }
 
-      const correctCount = meta.correctCount ?? answersList.filter((a: any) => a.isCorrect).length;
-      const wrongCount = meta.wrongCount ?? (answersList.length - correctCount);
-      const className = meta.className || 'X ATPH';
-      const studentNisn = meta.studentNisn || '-';
-      const subjectName = meta.subjectName || 'Dasar-Dasar Agribisnis Tanaman';
-      const topic = meta.topic || 'Pengelolaan Faktor Produksi';
+      if (studentId && studentId !== sessionUser.id) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Akses ditolak: Siswa tidak diizinkan membaca jawaban atau nilai siswa lain.',
+            data: [],
+          },
+          { status: 403 }
+        );
+      }
 
-      return {
-        id: row.id,
-        quizId: row.quiz_id,
-        quizTitle: row.quiz_title || 'Kuis ATPH',
-        studentId: row.student_id,
-        studentName: row.student_name,
-        className,
-        studentNisn,
-        subjectName,
-        topic,
-        score: Number(row.score) || 0,
-        maxScore: Number(row.max_score) || 100,
-        percentage: Number(row.score) || 0,
-        isPassed: Boolean(row.is_passed),
-        passed: Boolean(row.is_passed),
-        correctCount,
-        wrongCount,
-        totalQuestions: meta.totalQuestions || answersList.length || 20,
-        startedAt: row.started_at,
-        completedAt: row.completed_at || row.started_at,
-        status: row.status || 'graded',
-        answers: answersList,
-        source: 'supabase',
-      };
-    });
+      if (attemptId) {
+        const single = await getEvaluationAttemptById(attemptId);
+        if (!single) {
+          return NextResponse.json({ success: false, error: 'Data tidak ditemukan' }, { status: 404 });
+        }
+        if (single.studentId !== sessionUser.id) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'Akses ditolak: Anda hanya dapat melihat hasil evaluasi milik sendiri.',
+            },
+            { status: 403 }
+          );
+        }
+        const settings = getQuizSettings(single.quizId);
+        return NextResponse.json({
+          success: true,
+          data: [sanitizeAttemptForStudent(single, settings)],
+        });
+      }
+
+      const ownAttempts = await listEvaluationAttempts({
+        quizId,
+        studentId: sessionUser.id,
+      });
+
+      const sanitized = ownAttempts.map((att) => {
+        const settings = getQuizSettings(att.quizId);
+        return sanitizeAttemptForStudent(att, settings);
+      });
+
+      return NextResponse.json({
+        success: true,
+        count: sanitized.length,
+        data: sanitized,
+      });
+    }
+
+    // Akses Guru / Admin: dapat melihat seluruh jawaban, rincian AI, kunci, dan nilai pada kelas kewenangannya
+    if (attemptId) {
+      const single = await getEvaluationAttemptById(attemptId);
+      if (!single) {
+        return NextResponse.json({ success: false, error: 'Data tidak ditemukan' }, { status: 404 });
+      }
+      if (!canTeacherAccessClass(sessionUser, single.className)) {
+        return NextResponse.json(
+          { success: false, error: 'Akses ditolak: Kelas siswa berada di luar kewenangan Anda.' },
+          { status: 403 }
+        );
+      }
+      return NextResponse.json({
+        success: true,
+        count: 1,
+        data: [single],
+      });
+    }
+
+    const rawAttempts = await listEvaluationAttempts({ quizId, studentId });
+    const attempts = rawAttempts.filter((att) => canTeacherAccessClass(sessionUser, att.className));
+    const sessions = listExamSessions({ quizId, studentId }).filter((s) =>
+      canTeacherAccessClass(sessionUser, s.className)
+    );
 
     return NextResponse.json({
       success: true,
       count: attempts.length,
       data: attempts,
+      examSessions: sessions,
     });
   } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message, data: [] }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: err.message || 'Gagal memuat data percobaan kuis', data: [] },
+      { status: 500 }
+    );
   }
 }
-

@@ -101,7 +101,23 @@ export default function StudentQuizzesPage() {
     if (user) {
       let myAttempts = DataProvider.getQuizAttempts(user.id);
       try {
-        const res = await fetch(`/api/admin/quiz-attempts?studentId=${user.id}`);
+        const sessionPayload = encodeURIComponent(
+          JSON.stringify({
+            id: user.id,
+            email: user.email || '',
+            fullName: user.fullName || 'Siswa ATPH',
+            role: 'student',
+            classId: user.classId,
+            className: user.className,
+            nisn: user.nisn,
+          })
+        );
+        const res = await fetch(`/api/admin/quiz-attempts?studentId=${encodeURIComponent(user.id)}`, {
+          headers: {
+            'x-edu-session': sessionPayload,
+            'x-edu-role-hint': 'student',
+          },
+        });
         const json = await res.json();
         if (res.ok && json.success && Array.isArray(json.data) && json.data.length > 0) {
           const merged = [...json.data];

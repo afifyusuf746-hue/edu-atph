@@ -11,6 +11,11 @@ import {
   GradeRecord,
   Announcement,
 } from '@/types';
+import {
+  HIDROPONIK_XI_MATERIAL,
+  HIDROPONIK_XI_QUIZ,
+  HIDROPONIK_XI_QUESTIONS,
+} from './hidroponik-xi-data';
 
 export const INITIAL_CLASSES: ClassItem[] = [
   {
@@ -1025,6 +1030,7 @@ Untuk mencapai kualitas selada krispi dan bebas rasa pahit:
     updatedAt: '2026-10-28T08:15:00Z',
   },
 
+  HIDROPONIK_XI_MATERIAL,
   {
     id: 'mat-pht-hortikultura',
     title: 'Pengendalian Hama Terpadu (PHT) Tanaman Cabai Merah',
@@ -1344,6 +1350,7 @@ export const INITIAL_QUIZZES: Quiz[] = [
     questionCount: 20,
     createdAt: '2026-08-05T08:00:00Z',
   },
+  HIDROPONIK_XI_QUIZ,
 ];
 
 export const INITIAL_QUIZ_QUESTIONS: QuizQuestion[] = [
@@ -1906,6 +1913,7 @@ export const INITIAL_QUIZ_QUESTIONS: QuizQuestion[] = [
     points: 5,
     orderIndex: 20,
   },
+  ...HIDROPONIK_XI_QUESTIONS,
 ];
 
 export const INITIAL_QUIZ_ATTEMPTS: QuizAttempt[] = [

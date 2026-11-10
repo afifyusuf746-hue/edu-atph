@@ -38,6 +38,16 @@ export default function GuruMaterialsPage() {
       desc: 'Materi lengkap verbatim 24 halaman (hal. 111-134), tanah, HOK tenaga kerja, modal tetap/bergerak, PHT, dan manajemen.',
       pages: '24 Halaman Verbatim',
       topic: 'Dasar Kejuruan ATPH (Aktif Ujian)',
+      href: '/student/materials/mat-bab-iv-pengelolaan-faktor-produksi-x',
+    },
+    {
+      id: 'mat-hidroponik-xi',
+      number: 'KELAS XI — HIDROPONIK',
+      title: 'Teknologi Budidaya Tanaman Sistem Hidroponik (Kelas XI ATPH)',
+      desc: 'Modul PDF lengkap berisi Materi Pembelajaran (Fisiologi DO, Media Inert, NFT, DFT, Drip Fertigasi, Aeroponik, Kimia AB Mix, pH/EC, & Diagnosis Masalah), Rangkuman, Glosarium, dan Daftar Pustaka.',
+      pages: '5 Halaman PDF + Evaluasi AI',
+      topic: 'Sistem Hidroponik Kelas XI (10 PG, 5 Uraian, 2 Studi Kasus)',
+      href: '/student/materials/mat-hidroponik-xi',
     },
   ];
 
@@ -72,7 +82,7 @@ export default function GuruMaterialsPage() {
               <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
                 <span className="text-[11px] font-bold text-slate-400">{ch.topic}</span>
                 <Link
-                  href="/student/materials/mat-bab-4"
+                  href={(ch as any).href || '/student/materials/mat-bab-iv-pengelolaan-faktor-produksi-x'}
                   className="px-4 py-2 rounded-xl bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 text-teal-800 dark:text-teal-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
                 >
                   <span>Buka Modul Ajar</span>

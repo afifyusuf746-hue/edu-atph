@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import DashboardHeader from '@/components/layout/DashboardHeader';
+import HidroponikTeacherGradingPanel from '@/components/quizzes/HidroponikTeacherGradingPanel';
 import {
   HelpCircle,
   Plus,
@@ -351,6 +352,11 @@ export default function AdminQuizzesPage() {
                           </div>
                         );
                       })
+                    )}
+                    {level === 'XI' && (
+                      <div className="pt-2">
+                        <HidroponikTeacherGradingPanel />
+                      </div>
                     )}
                   </div>
                 )}
