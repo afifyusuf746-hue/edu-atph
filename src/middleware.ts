@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { verifySessionToken } from '@/lib/server-auth';
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Lewati static assets, api routes, icons, dan halaman public
@@ -19,32 +20,43 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Ambil sesi pengguna dari HTTP Cookie
-  let userRole: string | null = null;
-  const userSessionCookie = request.cookies.get('edu_user_session')?.value;
-  const studentSessionCookie = request.cookies.get('edu_student_session')?.value;
+  // 1. Ambil dan verifikasi sesi pengguna dari HTTP Cookie yang ditandatangani secara kriptografis
+  let userRole: 'admin' | 'teacher' | 'student' | null = null;
+  const sessionToken = request.cookies.get('edu_session_token')?.value;
 
-  if (userSessionCookie) {
-    try {
-      const parsed = JSON.parse(userSessionCookie);
-      userRole = parsed?.role || null;
-    } catch {}
-  } else if (studentSessionCookie) {
-    try {
-      const parsed = JSON.parse(studentSessionCookie);
-      userRole = parsed?.role || 'student';
-    } catch {}
+  if (sessionToken) {
+    const verified = await verifySessionToken(sessionToken);
+    if (verified) {
+      userRole = verified.role;
+    }
   }
 
-  // 1. JALUR ADMIN (/admin/*)
+  // Fallback transisi untuk sesi siswa yang sudah ada sebelum migrasi (hanya untuk jalur siswa)
+  if (!userRole) {
+    const studentSessionCookie = request.cookies.get('edu_student_session')?.value;
+    if (studentSessionCookie) {
+      try {
+        const parsed = JSON.parse(decodeURIComponent(studentSessionCookie));
+        if (parsed?.id && parsed?.email) {
+          userRole = 'student'; // Selalu 'student', tidak dapat dieskalasi ke admin
+        }
+      } catch {}
+    }
+  }
+
+  // 2. JALUR ADMIN (/admin/*)
   if (pathname.startsWith('/admin')) {
     // Pengecualian jika ada rute /admin/login
     if (pathname === '/admin/login') {
+      // Jika admin sudah login sah, arahkan langsung ke /admin/dashboard
+      if (userRole === 'admin') {
+        return NextResponse.redirect(new URL('/admin/dashboard', request.url));
+      }
       return NextResponse.next();
     }
 
     if (!userRole) {
-      const loginUrl = new URL('/login', request.url);
+      const loginUrl = new URL('/admin/login', request.url);
       loginUrl.searchParams.set('redirect', pathname);
       return NextResponse.redirect(loginUrl);
     }
@@ -57,7 +69,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // 2. JALUR GURU (/guru/*)
+  // 3. JALUR GURU (/guru/*)
   if (pathname.startsWith('/guru')) {
     if (!userRole) {
       const loginUrl = new URL('/login', request.url);
@@ -74,7 +86,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // 3. JALUR SISWA (/siswa/* dan /student/*)
+  // 4. JALUR SISWA (/siswa/* dan /student/*)
   if (pathname.startsWith('/siswa') || pathname.startsWith('/student')) {
     // Redirect alias /siswa/dashboard ke /student/dashboard jika diperlukan
     if (pathname === '/siswa' || pathname === '/siswa/dashboard') {
@@ -101,4 +113,3 @@ export const config = {
     '/siswa/:path*',
   ],
 };
-

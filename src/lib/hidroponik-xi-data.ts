@@ -196,7 +196,7 @@ export const HIDROPONIK_XI_QUIZ: Quiz = {
   id: 'quiz-hidroponik-xi',
   title: 'Evaluasi Pembelajaran: Teknologi Budidaya Tanaman Hidroponik (Kelas XI ATPH)',
   description:
-    'Evaluasi komprehensif materi Hidroponik Kelas XI SMK ATPH berdasarkan PDF Modul Ajar: terdiri atas 10 Soal Pilihan Ganda (30%), 5 Soal Uraian Konsep (40%), dan 2 Studi Kasus Pemecahan Masalah (30%).',
+    'Evaluasi komprehensif materi Hidroponik Kelas XI SMK ATPH berdasarkan PDF Modul Ajar: 10 Soal Pilihan Ganda mandiri dan terstandarisasi.',
   targetClassId: 'cls-xi-at-1',
   targetClassName: 'XI ATPH',
   topic: 'Teknologi Budidaya Tanaman Sistem Hidroponik',
@@ -209,11 +209,11 @@ export const HIDROPONIK_XI_QUIZ: Quiz = {
   isClosed: false,
   allowStudentReview: false,
   weightsConfig: {
-    mcqWeight: 30,
-    essayWeight: 40,
-    caseStudyWeight: 30,
+    mcqWeight: 100,
+    essayWeight: 0,
+    caseStudyWeight: 0,
   },
-  questionCount: 17,
+  questionCount: 10,
   createdAt: '2026-08-10T08:30:00Z',
 };
 
@@ -401,7 +401,13 @@ export const HIDROPONIK_XI_QUESTIONS: QuizQuestion[] = [
     points: 1,
     orderIndex: 10,
   },
+];
 
+// ============================================================================
+// SOAL ESAI & STUDI KASUS DINONAKTIFKAN UNTUK PENGERJAAN AKTIF/BARU
+// Disimpan secara historis agar data percobaan lama tetap valid dan tidak hilang
+// ============================================================================
+export const HIDROPONIK_XI_HISTORICAL_SUBJECTIVE_QUESTIONS: QuizQuestion[] = [
   // ============================================================================
   // BAGIAN B: 5 SOAL URAIAN (questionType: 'essay', points: 100)
   // ============================================================================
@@ -617,4 +623,10 @@ export const HIDROPONIK_XI_QUESTIONS: QuizQuestion[] = [
     orderIndex: 17,
   },
 ];
+
+export const HIDROPONIK_XI_ALL_QUESTIONS: QuizQuestion[] = [
+  ...HIDROPONIK_XI_QUESTIONS,
+  ...HIDROPONIK_XI_HISTORICAL_SUBJECTIVE_QUESTIONS,
+];
+
 

@@ -307,19 +307,12 @@ export async function POST(req: NextRequest) {
       answers: evaluatedAnswers,
     };
 
-    // Kunci sesi ujian agar pemantauan berhenti dan mencegah pengumpulan ganda
     const finalDraftObj: Record<string, string> = {};
     studentAnswersMap.forEach((v, k) => {
       finalDraftObj[k] = v;
     });
-    await completeExamSessionOnSubmit({
-      quizId,
-      studentId,
-      attemptId,
-      finalDraftAnswers: finalDraftObj,
-    });
 
-    // 4. Simpan ke Supabase quiz_attempts sebagai sumber utama
+    // 4. Simpan ke Supabase quiz_attempts sebagai sumber utama permanen
     const storeResult = await saveEvaluationAttempt(fullAttemptRecord);
     if (!storeResult.savedSupabase) {
       console.error('[QUIZ_SUBMIT_DB_FAILED]', {
@@ -341,6 +334,14 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       );
     }
+
+    // 5. Kunci sesi ujian HANYA setelah hasil final berhasil dikonfirmasi tersimpan permanen di Supabase
+    await completeExamSessionOnSubmit({
+      quizId,
+      studentId,
+      attemptId,
+      finalDraftAnswers: finalDraftObj,
+    });
 
     let studentSaved = false;
 

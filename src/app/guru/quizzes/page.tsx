@@ -82,12 +82,12 @@ const QUIZZES_BY_GRADE: Record<string, Array<{
     {
       id: 'quiz-hidroponik-xi',
       title: 'Evaluasi Pembelajaran: Teknologi Budidaya Tanaman Hidroponik (Kelas XI ATPH)',
-      questionsCount: 17,
+      questionsCount: 10,
       duration: '60 Menit',
       passingScore: 75,
       targetClass: 'Semua Rombel XI ATPH',
-      status: 'Aktif + Penilaian AI & Ujian Terkontrol',
-      desc: '10 soal pilihan ganda (30%), 5 soal uraian (40%), dan 2 studi kasus pemecahan masalah (30%) berbasis PDF Modul Hidroponik Kelas XI.',
+      status: 'Aktif + Pilihan Ganda & Ujian Terkontrol',
+      desc: '10 butir soal pilihan ganda mandiri berbasis PDF Modul Hidroponik Kelas XI SMK ATPH.',
     },
     {
       id: 'quiz-xi-bab-2',

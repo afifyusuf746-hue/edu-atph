@@ -11,6 +11,7 @@ import {
   ArrowLeft,
   AlertCircle,
   KeyRound,
+  Loader2,
 } from 'lucide-react';
 import { DataProvider } from '@/lib/data-provider';
 
@@ -21,35 +22,58 @@ export default function AdminLoginPage() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  const handleFormLogin = (e: React.FormEvent) => {
+  const handleFormLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email) {
-      setErrorMessage('Silakan masukkan alamat email administrator atau akun siswa.');
+    const cleanEmail = email.trim();
+    const cleanPassword = password.trim();
+
+    if (!cleanEmail) {
+      setErrorMessage('Silakan masukkan alamat email administrator resmi.');
       return;
     }
+    if (!cleanPassword) {
+      setErrorMessage('Silakan masukkan kata sandi administrator.');
+      return;
+    }
+
     setLoading(true);
     setErrorMessage('');
 
-    setTimeout(() => {
-      const user = DataProvider.login(email);
-      if (user) {
-        if (user.role === 'admin') {
-          router.push('/admin/dashboard');
-        } else {
-          // Portal admin diperbolehkan login siswa
-          router.push('/student/dashboard');
-        }
-      } else {
-        // Fallback email logic
-        if (email.toLowerCase().includes('admin') || email.toLowerCase().includes('okta')) {
-          DataProvider.login('', 'admin');
-          router.push('/admin/dashboard');
-        } else {
-          DataProvider.login('', 'student');
-          router.push('/student/dashboard');
-        }
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          password: cleanPassword,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setLoading(false);
+        setErrorMessage(data.error || 'Autentikasi gagal. Periksa kembali email dan kata sandi Anda.');
+        return;
       }
-    }, 450);
+
+      if (data.role !== 'admin') {
+        setLoading(false);
+        setErrorMessage('Akses ditolak: Akun ini bukan akun Administrator ATPH.');
+        return;
+      }
+
+      // Sinkronkan state pengguna lokal untuk reaktivitas UI instan
+      if (data.user) {
+        DataProvider.setCurrentUser(data.user);
+      }
+
+      // Navigasi ke konsol admin
+      router.push(data.redirectUrl || '/admin/dashboard');
+    } catch (err: any) {
+      setLoading(false);
+      setErrorMessage(err?.message || 'Gagal tersambung ke server autentikasi.');
+    }
   };
 
   return (
@@ -102,6 +126,7 @@ export default function AdminLoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="okta.nofiyanto@eduatph.sch.id"
+                  required
                   className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-700 bg-slate-800/80 text-white placeholder-slate-500 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
                 />
               </div>
@@ -120,6 +145,7 @@ export default function AdminLoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
+                  required
                   className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-700 bg-slate-800/80 text-white placeholder-slate-500 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
                 />
               </div>
@@ -128,10 +154,19 @@ export default function AdminLoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 px-4 rounded-xl font-bold text-xs sm:text-sm text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition-all hover:scale-[1.01]"
+              className="w-full py-3 px-4 rounded-xl font-bold text-xs sm:text-sm text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition-all hover:scale-[1.01] cursor-pointer disabled:opacity-60"
             >
-              <LogIn className="w-4 h-4" />
-              <span>{loading ? 'Memverifikasi Akses...' : 'Masuk ke Konsol Administrasi'}</span>
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Memverifikasi Akses Server...</span>
+                </>
+              ) : (
+                <>
+                  <LogIn className="w-4 h-4" />
+                  <span>Masuk ke Konsol Administrasi</span>
+                </>
+              )}
             </button>
           </form>
 
@@ -150,7 +185,7 @@ export default function AdminLoginPage() {
             className="inline-flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-emerald-400 transition-colors"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Kembali ke Portal Masuk Siswa</span>
+            <span>Kembali ke Portal Siswa</span>
           </Link>
         </div>
       </div>

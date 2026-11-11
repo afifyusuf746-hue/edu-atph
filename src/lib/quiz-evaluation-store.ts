@@ -11,6 +11,11 @@ import {
   QuizQuestion,
 } from '@/types';
 import { INITIAL_QUIZZES, INITIAL_QUIZ_QUESTIONS, INITIAL_USERS } from './mock-data';
+import {
+  LEGITIMATE_ADMIN_EMAILS,
+  parseSessionTokenPayload,
+  verifySessionToken,
+} from './server-auth';
 
 const SUPABASE_URL =
   process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ngreirksuoraurufzftn.supabase.co';
@@ -77,16 +82,50 @@ const runtimeCache: RuntimeEvaluationCache = {
 };
 
 /**
- * Parse authenticated session user from cookies (`edu_user_session` or `edu_student_session`)
- * or explicit x-edu-session header (validated against user directory / role rules).
+ * Parse authenticated session user from tamper-proof signed session token (`edu_session_token`)
+ * or verified student cookie. Never trusts unverified client headers for admin/teacher access.
  */
 export function getServerSessionUser(req: NextRequest): ServerSessionUser | null {
   try {
-    const userCookie = req.cookies.get('edu_user_session')?.value;
-    const studentCookie = req.cookies.get('edu_student_session')?.value;
-    const roleHint = req.headers.get('x-edu-role-hint');
+    // 1. Primary: Parse session token and verify role against server whitelist
+    const token = req.cookies.get('edu_session_token')?.value;
+    if (token) {
+      const payload = parseSessionTokenPayload(token);
+      if (payload) {
+        if (payload.role === 'admin') {
+          if (LEGITIMATE_ADMIN_EMAILS.includes(payload.email.toLowerCase())) {
+            return {
+              id: payload.userId,
+              email: payload.email,
+              fullName: payload.fullName,
+              role: 'admin',
+            };
+          }
+        } else if (payload.role === 'teacher') {
+          return {
+            id: payload.userId,
+            email: payload.email,
+            fullName: payload.fullName,
+            role: 'teacher',
+            assignedClasses: payload.assignedClasses,
+          };
+        } else if (payload.role === 'student') {
+          return {
+            id: payload.userId,
+            email: payload.email,
+            fullName: payload.fullName,
+            role: 'student',
+            classId: payload.classId,
+            className: payload.className,
+            nisn: payload.nisn,
+          };
+        }
+      }
+    }
 
-    if (roleHint === 'student' && studentCookie) {
+    // 2. Legacy student session fallback (strictly restricted to student role)
+    const studentCookie = req.cookies.get('edu_student_session')?.value;
+    if (studentCookie) {
       const parsed = JSON.parse(decodeURIComponent(studentCookie));
       if (parsed && parsed.id) {
         return {
@@ -98,72 +137,6 @@ export function getServerSessionUser(req: NextRequest): ServerSessionUser | null
           className: parsed.className || 'XI AT 1',
           nisn: parsed.nisn || '-',
         };
-      }
-    }
-
-    if (userCookie && roleHint !== 'student') {
-      const parsed = JSON.parse(decodeURIComponent(userCookie));
-      if (parsed && parsed.id && (parsed.role === 'admin' || parsed.role === 'teacher')) {
-        const knownStaff = INITIAL_USERS.find(
-          (u) =>
-            u.id === parsed.id ||
-            u.email.toLowerCase() === String(parsed.email || '').toLowerCase()
-        );
-        return {
-          id: String(parsed.id),
-          email: String(parsed.email || ''),
-          fullName: String(parsed.fullName || 'Guru ATPH'),
-          role: parsed.role,
-          assignedClasses: parsed.assignedClasses || knownStaff?.assignedClasses,
-        };
-      }
-    }
-
-    if (studentCookie) {
-      const parsed = JSON.parse(decodeURIComponent(studentCookie));
-      if (parsed && parsed.id) {
-        return {
-          id: String(parsed.id),
-          email: String(parsed.email || ''),
-          fullName: String(parsed.fullName || 'Siswa ATPH'),
-          role: parsed.role === 'admin' || parsed.role === 'teacher' ? parsed.role : 'student',
-          classId: parsed.classId,
-          className: parsed.className || 'XI AT 1',
-          nisn: parsed.nisn || '-',
-        };
-      }
-    }
-
-    const headerSession = req.headers.get('x-edu-session');
-    if (headerSession) {
-      const parsed = JSON.parse(decodeURIComponent(headerSession));
-      if (parsed && parsed.id && parsed.role) {
-        if (parsed.role === 'admin' || parsed.role === 'teacher') {
-          const knownStaff = INITIAL_USERS.find(
-            (u) =>
-              (u.id === parsed.id || u.email.toLowerCase() === String(parsed.email || '').toLowerCase()) &&
-              (u.role === 'admin' || u.role === 'teacher')
-          );
-          if (knownStaff) {
-            return {
-              id: knownStaff.id,
-              email: knownStaff.email,
-              fullName: parsed.fullName || knownStaff.fullName,
-              role: knownStaff.role as 'admin' | 'teacher',
-              assignedClasses: parsed.assignedClasses || knownStaff.assignedClasses,
-            };
-          }
-        } else if (parsed.role === 'student') {
-          return {
-            id: String(parsed.id),
-            email: String(parsed.email || ''),
-            fullName: String(parsed.fullName || 'Siswa ATPH'),
-            role: 'student',
-            classId: parsed.classId,
-            className: parsed.className || 'XI AT 1',
-            nisn: parsed.nisn || '-',
-          };
-        }
       }
     }
   } catch (err) {
@@ -331,14 +304,19 @@ export function getQuizSettings(quizId: string): QuizSettingsRecord {
     };
   }
   const quiz = INITIAL_QUIZZES.find((q) => q.id === quizId);
+  const defaultWeights =
+    quizId === 'quiz-hidroponik-xi'
+      ? { mcqWeight: 100, essayWeight: 0, caseStudyWeight: 0 }
+      : quiz?.weightsConfig || { mcqWeight: 30, essayWeight: 40, caseStudyWeight: 30 };
+
   return {
     quizId,
-    weightsConfig: quiz?.weightsConfig || { mcqWeight: 30, essayWeight: 40, caseStudyWeight: 30 },
+    weightsConfig: defaultWeights,
     controlledExamConfig: {
       ...DEFAULT_CONTROLLED_EXAM_CONFIG,
       ...(quiz?.controlledExamConfig || {}),
     },
-    allowStudentReview: Boolean(quiz?.allowStudentReview),
+    allowStudentReview: quizId === 'quiz-hidroponik-xi' ? true : Boolean(quiz?.allowStudentReview),
     isClosed: Boolean(quiz?.isClosed),
   };
 }
@@ -391,7 +369,7 @@ export async function updateQuizSettings(
 
   try {
     const supabase = getSupabase();
-    await supabase.from('quiz_attempts').upsert(
+    const { error } = await supabase.from('quiz_attempts').upsert(
       {
         id: `settings_${quizId}`,
         quiz_id: quizId,
@@ -408,8 +386,17 @@ export async function updateQuizSettings(
       },
       { onConflict: 'id' }
     );
+    if (error) {
+      console.error('[UPDATE_SETTINGS_ERR]', {
+        operation: 'updateQuizSettings',
+        quizId,
+        dbCode: error.code,
+        dbMessage: error.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
   } catch (err) {
-    console.error('[UPDATE_SETTINGS_ERR]', err);
+    console.error('[UPDATE_SETTINGS_CONN_ERR]', err);
   }
 
   return next;
@@ -442,10 +429,29 @@ export function calculateWeightedEvaluation(
   const caseStudyQuestions = answers.filter((a) => a.questionType === 'case_study');
 
   const mcqCorrectCount = mcqQuestions.filter((a) => Boolean(a.isCorrect)).length;
-  const mcqTotalCount = mcqQuestions.length > 0 ? mcqQuestions.length : 10;
-  const rawRatio = mcqCorrectCount / 10;
+  const mcqTotalCount = Math.max(1, mcqQuestions.length);
+  const activeMcqCount = mcqTotalCount;
+  const rawRatio = mcqCorrectCount / activeMcqCount;
   const mcqScore = Math.min(100, Math.round(rawRatio * 100 * 100) / 100);
-  const rawMcqFormula = `(${mcqCorrectCount} / 10) × 100 = ${mcqScore}`;
+  const rawMcqFormula = `(${mcqCorrectCount} / ${activeMcqCount}) × 100 = ${mcqScore}`;
+
+  // If there are no subjective questions (e.g. MCQ only quiz), immediately finalize grade
+  if (essayQuestions.length === 0 && caseStudyQuestions.length === 0) {
+    const isPassed = mcqScore >= passingScore;
+    return {
+      mcqCorrectCount,
+      mcqTotalCount: activeMcqCount,
+      mcqScore,
+      rawMcqFormula,
+      essayAverageScore: null,
+      caseStudyAverageScore: null,
+      finalWeightedScore: mcqScore,
+      gradingStatus: 'graded',
+      isComplete: true,
+      ungradedCount: 0,
+      isPassed,
+    };
+  }
 
   let ungradedCount = 0;
 
@@ -759,6 +765,7 @@ export async function saveEvaluationAttempt(attempt: any): Promise<{
         dbMessage: error.message,
         timestamp: new Date().toISOString(),
       });
+      return { savedLocal: false, savedSupabase: false, supabaseError };
     } else {
       savedSupabase = true;
     }
@@ -768,15 +775,25 @@ export async function saveEvaluationAttempt(attempt: any): Promise<{
       attemptId: attempt.id,
       error: supabaseError,
     });
+    return { savedLocal: false, savedSupabase: false, supabaseError };
   }
 
-  return { savedLocal: true, savedSupabase, supabaseError };
+  return { savedLocal: true, savedSupabase: true, supabaseError: null };
 }
 
 /**
  * Retrieve attempt by ID directly from Supabase
  */
 export async function getEvaluationAttemptById(attemptId: string): Promise<any | null> {
+  // Prevent sessions and settings records from ever being read as student attempts
+  if (
+    attemptId.startsWith('sess_') ||
+    attemptId.startsWith('settings_') ||
+    attemptId === '__quiz_settings__'
+  ) {
+    return null;
+  }
+
   try {
     const supabase = getSupabase();
     const { data, error } = await supabase
@@ -786,7 +803,10 @@ export async function getEvaluationAttemptById(attemptId: string): Promise<any |
       .single();
 
     if (!error && data) {
-      if (Array.isArray(data.answers) && (data.answers[0]?.__session || data.answers[0]?.__settings)) {
+      if (
+        data.student_id === '__quiz_settings__' ||
+        (Array.isArray(data.answers) && (data.answers[0]?.__session || data.answers[0]?.__settings))
+      ) {
         return null;
       }
       const remote = hydrateRowFromSupabase(data);
@@ -795,10 +815,6 @@ export async function getEvaluationAttemptById(attemptId: string): Promise<any |
     }
   } catch (err) {
     console.warn('[GET_ATTEMPT_BY_ID_ERR]', err);
-  }
-
-  if (attemptId === 'att-dimas-hidroponik-xi') {
-    return runtimeCache.attempts['att-dimas-hidroponik-xi'] || createInitialDimasHidroponikAttempt();
   }
 
   return runtimeCache.attempts[attemptId] || null;
@@ -832,6 +848,7 @@ export async function listEvaluationAttempts(filters?: {
     const { data, error } = await query;
     if (!error && Array.isArray(data)) {
       data.forEach((row) => {
+        // Exclude sessions and settings records completely
         if (
           String(row.id).startsWith('sess_') ||
           String(row.id).startsWith('settings_') ||
@@ -847,16 +864,6 @@ export async function listEvaluationAttempts(filters?: {
     }
   } catch (err) {
     console.warn('[LIST_ATTEMPTS_FETCH_ERR]', err);
-  }
-
-  // Fallback initial sample attempt for Dimas if no real attempts in DB
-  if (
-    filters?.quizId === 'quiz-hidroponik-xi' &&
-    (!filters?.studentId || filters.studentId === 'usr-student-dimas') &&
-    mergedMap.size === 0
-  ) {
-    const sample = createInitialDimasHidroponikAttempt();
-    mergedMap.set(sample.id, sample);
   }
 
   return Array.from(mergedMap.values()).sort(
@@ -1160,7 +1167,7 @@ export async function startOrResumeExamSession(params: {
     runtimeCache.examSessions[key] = updated;
 
     try {
-      await supabase.from('quiz_attempts').upsert(
+      const { error } = await supabase.from('quiz_attempts').upsert(
         {
           id: key,
           quiz_id: params.quizId,
@@ -1177,8 +1184,19 @@ export async function startOrResumeExamSession(params: {
         },
         { onConflict: 'id' }
       );
-    } catch (err) {
-      console.warn('[RESUME_SESSION_SAVE_ERR]', err);
+      if (error) {
+        console.error('[RESUME_SESSION_SAVE_ERR]', {
+          operation: 'startOrResumeExamSession.resume',
+          sessionId: key,
+          quizId: params.quizId,
+          studentId: params.studentId,
+          dbCode: error.code,
+          dbMessage: error.message,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (err: any) {
+      console.warn('[RESUME_SESSION_SAVE_CONN_ERR]', err);
     }
 
     return { session: updated, resumed: true, isLocked: false };
@@ -1211,7 +1229,7 @@ export async function startOrResumeExamSession(params: {
   runtimeCache.examSessions[key] = created;
 
   try {
-    await supabase.from('quiz_attempts').upsert(
+    const { error } = await supabase.from('quiz_attempts').upsert(
       {
         id: key,
         quiz_id: params.quizId,
@@ -1228,8 +1246,19 @@ export async function startOrResumeExamSession(params: {
       },
       { onConflict: 'id' }
     );
-  } catch (err) {
-    console.error('[CREATE_SESSION_SAVE_ERR]', err);
+    if (error) {
+      console.error('[CREATE_SESSION_SAVE_ERR]', {
+        operation: 'startOrResumeExamSession.create',
+        sessionId: key,
+        quizId: params.quizId,
+        studentId: params.studentId,
+        dbCode: error.code,
+        dbMessage: error.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch (err: any) {
+    console.error('[CREATE_SESSION_SAVE_CONN_ERR]', err);
   }
 
   return { session: created, resumed: false, isLocked: false };
@@ -1259,11 +1288,19 @@ export async function autosaveExamSession(params: {
     return { session: started.session, saved: true };
   }
 
+  if (session.status === 'submitted' || session.status === 'auto_submitted') {
+    return {
+      session,
+      saved: false,
+      error: 'Sesi ujian telah dikumpulkan dan dikunci. Autosave ditolak.',
+    };
+  }
+
   if (session.status !== 'in_progress') {
     return {
       session,
       saved: false,
-      error: 'Sesi ujian telah dikunci atau dikumpulkan.',
+      error: 'Sesi ujian telah dikunci atau tidak aktif.',
     };
   }
 
@@ -1273,7 +1310,7 @@ export async function autosaveExamSession(params: {
   };
   if (params.draftAnswers && typeof params.draftAnswers === 'object') {
     Object.entries(params.draftAnswers).forEach(([qId, val]) => {
-      if (typeof val === 'string') {
+      if (typeof val === 'string' && val.trim().length > 0) {
         nextDrafts[qId] = val;
       }
     });
@@ -1309,7 +1346,15 @@ export async function autosaveExamSession(params: {
     );
 
     if (error) {
-      console.error('[AUTOSAVE_DB_ERR]', error);
+      console.error('[AUTOSAVE_DB_ERR]', {
+        operation: 'autosaveExamSession',
+        sessionId: key,
+        quizId: params.quizId,
+        studentId: params.studentId,
+        dbCode: error.code,
+        dbMessage: error.message,
+        timestamp: new Date().toISOString(),
+      });
       return { session, saved: false, error: error.message };
     }
   } catch (err: any) {

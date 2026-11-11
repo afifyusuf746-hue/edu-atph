@@ -53,17 +53,8 @@ export default function GuruGradesPage() {
   const loadData = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      const staffSession = encodeURIComponent(
-        JSON.stringify({
-          id: 'usr-tch-001',
-          email: 'budi.santoso@guru.eduatph.sch.id',
-          fullName: 'Budi Santoso, S.P., M.Si.',
-          role: 'teacher',
-        })
-      );
       const res = await fetch('/api/admin/quiz-attempts', {
         cache: 'no-store',
-        headers: { 'x-edu-session': staffSession, 'x-edu-role-hint': 'teacher' },
       });
       const json = await res.json();
       if (res.ok && json.success && Array.isArray(json.data)) {

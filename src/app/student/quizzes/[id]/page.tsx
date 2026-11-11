@@ -1009,7 +1009,7 @@ export default function StudentQuizTakerPage() {
 
           {examStarted && !isSubmitted && (
             <div className="flex flex-wrap items-center gap-2.5">
-              {/* Live Autosave Status Badge */}
+              {/* Live Autosave Status Badge (4 Explicit States) */}
               <div
                 aria-live="polite"
                 className={`px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 border ${
@@ -1017,32 +1017,39 @@ export default function StudentQuizTakerPage() {
                     ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
                     : autosaveStatus === 'unsynced'
                     ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800'
-                    : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                    : autosaveStatus === 'saved'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                    : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
                 }`}
               >
                 {autosaveStatus === 'saving' ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>Menyimpan...</span>
+                    <span>Sedang menyimpan...</span>
                   </>
                 ) : autosaveStatus === 'unsynced' ? (
                   <>
                     <CloudOff className="w-3.5 h-3.5" />
-                    <span>Belum tersinkron</span>
+                    <span>Gagal menyimpan, coba lagi</span>
                     <button
                       type="button"
                       onClick={() => syncDraftAnswersToServer(selectedAnswersRef.current)}
-                      className="ml-1 underline cursor-pointer"
+                      className="ml-1 underline cursor-pointer font-black hover:text-rose-900"
                     >
-                      Sinkronkan
+                      Coba Lagi
                     </button>
+                  </>
+                ) : autosaveStatus === 'saved' ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>
+                      Tersimpan di server{lastSavedTimeLabel ? ` (${lastSavedTimeLabel})` : ''}
+                    </span>
                   </>
                 ) : (
                   <>
-                    <Check className="w-3.5 h-3.5" />
-                    <span>
-                      Tersimpan{lastSavedTimeLabel ? ` (${lastSavedTimeLabel})` : ''}
-                    </span>
+                    <span className="w-2 h-2 rounded-full bg-slate-400" />
+                    <span>Belum tersimpan</span>
                   </>
                 )}
               </div>

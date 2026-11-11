@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import {
   Sprout,
   LayoutDashboard,
@@ -19,8 +19,10 @@ import {
   ChevronRight,
   PanelLeftClose,
   X,
+  LogOut,
 } from 'lucide-react';
 import { useAdminNav } from '@/context/AdminNavContext';
+import { DataProvider } from '@/lib/data-provider';
 
 export interface AdminNavItem {
   label: string;
@@ -43,12 +45,22 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
 ];
 
 export default function AdminSidebar() {
+  const router = useRouter();
   const pathname = usePathname();
   const nav = useAdminNav();
   const isHidden = nav?.isSidebarHidden ?? false;
   const isMobileDrawerOpen = nav?.isMobileDrawerOpen ?? false;
   const closeDrawer = () => nav?.setIsMobileDrawerOpen(false);
   const toggleSidebar = () => nav?.toggleSidebar();
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {}
+    DataProvider.logout();
+    closeDrawer();
+    router.push('/admin/login');
+  };
 
   return (
     <>
@@ -159,8 +171,8 @@ export default function AdminSidebar() {
             </nav>
           </div>
 
-          {/* Footer link to landing page */}
-          <div className="p-4 border-t border-slate-800 mt-auto">
+          {/* Footer links: landing page & logout */}
+          <div className="p-4 border-t border-slate-800 mt-auto space-y-1">
             <Link
               href="/"
               onClick={closeDrawer}
@@ -169,6 +181,14 @@ export default function AdminSidebar() {
               <ArrowLeft className="w-4 h-4" />
               <span>Kembali ke Halaman Publik</span>
             </Link>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 transition-colors cursor-pointer text-left"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Keluar dari Admin</span>
+            </button>
           </div>
         </div>
       </aside>

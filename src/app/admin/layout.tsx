@@ -12,31 +12,69 @@ function AdminLayoutContent({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [authorized, setAuthorized] = useState(false);
+  const [verifying, setVerifying] = useState(true);
 
   useEffect(() => {
-    if (pathname === '/admin/login') {
-      setAuthorized(true);
-      return;
+    let isMounted = true;
+
+    async function checkServerSession() {
+      if (pathname === '/admin/login') {
+        setAuthorized(true);
+        setVerifying(false);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/auth/me', {
+          cache: 'no-store',
+        });
+        const data = await res.json();
+
+        if (!isMounted) return;
+
+        if (res.ok && data.authenticated && data.user) {
+          if (data.user.role === 'admin') {
+            setCurrentUser(data.user);
+            DataProvider.setCurrentUser(data.user);
+            setAuthorized(true);
+          } else {
+            // Pengguna bukan admin
+            router.push('/403');
+          }
+        } else {
+          // Belum terautentikasi di server
+          router.push(`/admin/login?redirect=${encodeURIComponent(pathname)}`);
+        }
+      } catch {
+        if (!isMounted) return;
+        // Fallback jika API gagal tetapi ada local admin
+        const local = DataProvider.getCurrentUser();
+        if (local && local.role === 'admin') {
+          setCurrentUser(local);
+          setAuthorized(true);
+        } else {
+          router.push(`/admin/login?redirect=${encodeURIComponent(pathname)}`);
+        }
+      } finally {
+        if (isMounted) {
+          setVerifying(false);
+        }
+      }
     }
 
-    const user = DataProvider.getCurrentUser();
-    setCurrentUser(user);
-    if (!user) {
-      router.push('/login?redirect=/admin/dashboard');
-    } else if (user.role !== 'admin') {
-      // Siswa dan guru tidak boleh mengakses rute admin, arahkan ke 403 Forbidden
-      router.push('/403');
-    } else {
-      setAuthorized(true);
-    }
+    checkServerSession();
+
+    return () => {
+      isMounted = false;
+    };
   }, [router, pathname]);
 
-  if (!authorized) {
+  if (verifying || !authorized) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950 text-white text-sm">
         <div className="flex items-center gap-3">
           <div className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-          <span>Memverifikasi Hak Akses Administrator...</span>
+          <span>Memverifikasi Hak Akses Administrator Server...</span>
         </div>
       </div>
     );

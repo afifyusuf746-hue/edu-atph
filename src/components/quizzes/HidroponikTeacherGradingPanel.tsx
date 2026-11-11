@@ -348,7 +348,9 @@ export default function HidroponikTeacherGradingPanel() {
     const isWeightValid = weightSum === 100;
 
     let finalScore: number | null = null;
-    if (isComplete && isWeightValid && essayAvg !== null && caseAvg !== null) {
+    if (essayQuestions.length === 0 && caseQuestions.length === 0) {
+      finalScore = mcqScore;
+    } else if (isComplete && isWeightValid && essayAvg !== null && caseAvg !== null) {
       const weighted =
         mcqScore * (Number(weights.mcqWeight) / 100) +
         essayAvg * (Number(weights.essayWeight) / 100) +

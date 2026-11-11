@@ -36,3 +36,4 @@ CREATE POLICY "Public and auth can insert quiz_attempts"
 DROP POLICY IF EXISTS "Public and auth can update quiz_attempts" ON public.quiz_attempts;
 CREATE POLICY "Public and auth can update quiz_attempts" 
   ON public.quiz_attempts FOR UPDATE USING (true);
+

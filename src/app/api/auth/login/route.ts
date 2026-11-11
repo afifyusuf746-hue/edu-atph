@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import {
+  signSessionToken,
+  verifyAdminCredentials,
+  verifyTeacherCredentials,
+} from '@/lib/server-auth';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ngreirksuoraurufzftn.supabase.co';
 const SUPABASE_KEY =
@@ -40,7 +45,7 @@ function generateStudentId(email: string): string {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { email, password, classId, className, fullName, rolePreference } = body;
+    const { email, password, classId, className, fullName } = body;
 
     const cleanEmail = (email || '').trim().toLowerCase();
     const cleanPassword = (password || '').trim();
@@ -53,34 +58,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Kata sandi wajib diisi' }, { status: 400 });
     }
 
-    const supabase = getSupabase();
     const nowIso = new Date().toISOString();
+    const isProd = process.env.NODE_ENV === 'production';
 
     // -------------------------------------------------------------
-    // 1. CEK ROLE ADMINISTRATOR
+    // 1. CEK ROLE ADMINISTRATOR (SERVER-SIDE WHITELIST & PASSWORD)
     // -------------------------------------------------------------
-    const isAdmin =
-      cleanEmail === 'oktanofiyanto123@gmail.com' ||
-      cleanEmail === 'admin@atph.sch.id' ||
-      cleanEmail.includes('okta.nofiyanto') ||
-      (cleanEmail.startsWith('admin') && cleanEmail.includes('@'));
-
-    if (isAdmin) {
-      // Validasi password admin
-      if (cleanPassword !== 'skaneba123' && cleanPassword !== 'admin123') {
-        return NextResponse.json({ success: false, error: 'Kata sandi administrator salah!' }, { status: 401 });
-      }
-
-      const adminUser = {
-        id: 'usr-admin-okta',
-        email: cleanEmail,
-        fullName: 'Okta Nofiyanto',
-        role: 'admin' as const,
-        major: 'Agribisnis Tanaman Pangan dan Hortikultura',
-        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=250&q=80',
-        isActive: true,
-        lastLoginAt: nowIso,
-      };
+    const adminUser = verifyAdminCredentials(cleanEmail, cleanPassword);
+    if (adminUser) {
+      const signedToken = await signSessionToken({
+        userId: adminUser.id,
+        email: adminUser.email,
+        fullName: adminUser.fullName,
+        role: 'admin',
+      });
 
       const res = NextResponse.json({
         success: true,
@@ -90,10 +81,21 @@ export async function POST(req: NextRequest) {
         message: 'Login Administrator berhasil',
       });
 
+      // Set tamper-proof signed session token (HTTP-only)
+      res.cookies.set('edu_session_token', signedToken, {
+        path: '/',
+        httpOnly: true,
+        secure: isProd,
+        maxAge: 60 * 60 * 24 * 30, // 30 hari
+        sameSite: 'lax',
+      });
+
+      // Display cookie for UI hydration
       res.cookies.set('edu_user_session', JSON.stringify(adminUser), {
         path: '/',
         httpOnly: false,
-        maxAge: 60 * 60 * 24 * 30, // 30 hari
+        secure: isProd,
+        maxAge: 60 * 60 * 24 * 30,
         sameSite: 'lax',
       });
 
@@ -103,50 +105,15 @@ export async function POST(req: NextRequest) {
     // -------------------------------------------------------------
     // 2. CEK ROLE GURU / PENDIDIK
     // -------------------------------------------------------------
-    let isTeacher = false;
-    let teacherRecord: any = null;
-
-    try {
-      const { data: dbTeacher } = await supabase
-        .from('teachers')
-        .select('*')
-        .eq('email', cleanEmail)
-        .maybeSingle();
-
-      if (dbTeacher) {
-        isTeacher = true;
-        teacherRecord = dbTeacher;
-      }
-    } catch {}
-
-    if (!isTeacher && (cleanEmail.includes('@guru.eduatph.sch.id') || cleanEmail.includes('guru.'))) {
-      isTeacher = true;
-    }
-
-    if (isTeacher) {
-      if (cleanPassword !== 'skaneba123') {
-        return NextResponse.json({ success: false, error: 'Kata sandi guru salah! Password resmi: skaneba123' }, { status: 401 });
-      }
-
-      const teacherName =
-        teacherRecord?.full_name ||
-        cleanEmail
-          .split('@')[0]
-          .replace(/[._-]/g, ' ')
-          .replace(/\b\w/g, (c: string) => c.toUpperCase());
-
-      const teacherUser = {
-        id: teacherRecord?.id || `usr-tch-${Date.now()}`,
-        email: cleanEmail,
-        fullName: teacherName,
-        nip: teacherRecord?.nip || '198005122005011003',
-        role: 'teacher' as const,
-        subjectName: teacherRecord?.subject_name || 'Dasar-Dasar Agribisnis Tanaman',
-        assignedClasses: teacherRecord?.assigned_classes || ['cls-x-at-1', 'cls-x-at-2', 'cls-x-at-3'],
-        avatarUrl: teacherRecord?.avatar_url || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=250&q=80',
-        isActive: true,
-        lastLoginAt: nowIso,
-      };
+    const teacherUser = verifyTeacherCredentials(cleanEmail, cleanPassword);
+    if (teacherUser) {
+      const signedToken = await signSessionToken({
+        userId: teacherUser.id,
+        email: teacherUser.email,
+        fullName: teacherUser.fullName,
+        role: 'teacher',
+        assignedClasses: teacherUser.assignedClasses,
+      });
 
       const res = NextResponse.json({
         success: true,
@@ -156,9 +123,18 @@ export async function POST(req: NextRequest) {
         message: 'Selamat datang di Ruang Guru ATPH',
       });
 
+      res.cookies.set('edu_session_token', signedToken, {
+        path: '/',
+        httpOnly: true,
+        secure: isProd,
+        maxAge: 60 * 60 * 24 * 30,
+        sameSite: 'lax',
+      });
+
       res.cookies.set('edu_user_session', JSON.stringify(teacherUser), {
         path: '/',
         httpOnly: false,
+        secure: isProd,
         maxAge: 60 * 60 * 24 * 30,
         sameSite: 'lax',
       });
@@ -167,17 +143,19 @@ export async function POST(req: NextRequest) {
     }
 
     // -------------------------------------------------------------
-    // 3. ROLE SISWA (AUTO-REGISTER & LOGIN)
+    // 3. ROLE SISWA (VALIDASI DAN SYNC SUPABASE)
     // -------------------------------------------------------------
     if (cleanPassword !== 'skaneba123' && !cleanEmail.includes('demo')) {
-      return NextResponse.json({ success: false, error: 'Kata sandi salah! Password resmi siswa: skaneba123' }, { status: 401 });
+      return NextResponse.json(
+        { success: false, error: 'Kata sandi atau kredensial yang Anda masukkan salah.' },
+        { status: 401 }
+      );
     }
 
     const studentId = generateStudentId(cleanEmail);
     const targetClassId = classId || 'cls-x-at-1';
     const targetClassName = className || CLASS_MAP[targetClassId] || 'X AT 1';
 
-    // Format nama
     const namePart = cleanEmail.split('@')[0].replace(/[._-]/g, ' ');
     const formattedName =
       namePart
@@ -187,7 +165,6 @@ export async function POST(req: NextRequest) {
         .join(' ') || 'Siswa ATPH';
     const resolvedName = (fullName && fullName.trim()) || formattedName;
 
-    // Deterministic NIS
     let nisnSeed = 0;
     for (let i = 0; i < cleanEmail.length; i++) {
       nisnSeed = (nisnSeed * 31 + cleanEmail.charCodeAt(i)) % 90000000;
@@ -195,16 +172,16 @@ export async function POST(req: NextRequest) {
     const resolvedNis = `00${(10000000 + Math.abs(nisnSeed)).toString()}`;
 
     let studentRecord: any = null;
+    const supabase = getSupabase();
 
-    // Database check & upsert in Supabase
     try {
-      const { data: existingStudent } = await supabase
+      const { data: existingStudent, error: findErr } = await supabase
         .from('students')
         .select('*')
         .eq('email', cleanEmail)
         .maybeSingle();
 
-      if (existingStudent) {
+      if (!findErr && existingStudent) {
         const updatePayload: any = {
           last_login_at: nowIso,
           updated_at: nowIso,
@@ -243,25 +220,16 @@ export async function POST(req: NextRequest) {
           updated_at: nowIso,
         };
 
-        const { data: inserted } = await supabase
+        const { data: inserted, error: insErr } = await supabase
           .from('students')
           .insert(newStudentPayload)
           .select()
           .maybeSingle();
 
+        if (insErr) {
+          console.warn('[STUDENT_REGISTER_WARN]', insErr.message);
+        }
         studentRecord = inserted || newStudentPayload;
-
-        try {
-          await supabase.from('class_students').upsert(
-            {
-              class_id: targetClassId,
-              student_id: studentId,
-              academic_year: '2025/2026',
-              status: 'active',
-            },
-            { onConflict: 'class_id,student_id' }
-          );
-        } catch {}
       }
     } catch (err: any) {
       console.warn('Supabase student login sync:', err?.message);
@@ -285,6 +253,16 @@ export async function POST(req: NextRequest) {
       createdAt: studentRecord?.created_at || nowIso,
     };
 
+    const signedToken = await signSessionToken({
+      userId: studentUser.id,
+      email: studentUser.email,
+      fullName: studentUser.fullName,
+      role: 'student',
+      classId: studentUser.classId,
+      className: studentUser.className,
+      nisn: studentUser.nisn,
+    });
+
     const res = NextResponse.json({
       success: true,
       role: 'student',
@@ -293,10 +271,18 @@ export async function POST(req: NextRequest) {
       message: 'Login siswa berhasil',
     });
 
-    // Simpan kedua cookie untuk kompatibilitas penuh
+    res.cookies.set('edu_session_token', signedToken, {
+      path: '/',
+      httpOnly: true,
+      secure: isProd,
+      maxAge: 60 * 60 * 24 * 30,
+      sameSite: 'lax',
+    });
+
     res.cookies.set('edu_user_session', JSON.stringify(studentUser), {
       path: '/',
       httpOnly: false,
+      secure: isProd,
       maxAge: 60 * 60 * 24 * 30,
       sameSite: 'lax',
     });
@@ -304,6 +290,7 @@ export async function POST(req: NextRequest) {
     res.cookies.set('edu_student_session', JSON.stringify(studentUser), {
       path: '/',
       httpOnly: false,
+      secure: isProd,
       maxAge: 60 * 60 * 24 * 30,
       sameSite: 'lax',
     });
