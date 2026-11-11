@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
     );
 
     // 2b. Periksa sesi ujian aktif / terkunci (Mode Ujian Terkontrol)
-    const activeSession = getExamSession(quizId, studentId);
+    const activeSession = await getExamSession(quizId, studentId);
     if (
       activeSession &&
       (activeSession.status === 'submitted' || activeSession.status === 'auto_submitted') &&
@@ -312,17 +312,36 @@ export async function POST(req: NextRequest) {
     studentAnswersMap.forEach((v, k) => {
       finalDraftObj[k] = v;
     });
-    completeExamSessionOnSubmit({
+    await completeExamSessionOnSubmit({
       quizId,
       studentId,
       attemptId,
       finalDraftAnswers: finalDraftObj,
     });
 
-    // 4. Simpan ke Local Store + Supabase melalui helper terpadu
+    // 4. Simpan ke Supabase quiz_attempts sebagai sumber utama
     const storeResult = await saveEvaluationAttempt(fullAttemptRecord);
-    let synced = storeResult.savedSupabase;
-    let syncError = storeResult.supabaseError || null;
+    if (!storeResult.savedSupabase) {
+      console.error('[QUIZ_SUBMIT_DB_FAILED]', {
+        quizId,
+        studentId,
+        attemptId,
+        dbError: storeResult.supabaseError,
+        timestamp: new Date().toISOString(),
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            'Jawaban belum berhasil tersimpan ke database: ' +
+            (storeResult.supabaseError || 'Gagal menyimpan ke server. Silakan coba kirim ulang.'),
+          synced: false,
+          syncError: storeResult.supabaseError,
+        },
+        { status: 500 }
+      );
+    }
+
     let studentSaved = false;
 
     // Hubungkan siswa ke rombel kelas di Supabase jika koneksi tersedia
@@ -347,7 +366,7 @@ export async function POST(req: NextRequest) {
       }
       const { error: stdErr } = await supabase
         .from('students')
-        .upsert(studentPayload, { onConflict: 'email' });
+        .upsert(studentPayload, { onConflict: 'id' });
       if (!stdErr) studentSaved = true;
 
       try {
@@ -400,13 +419,14 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      synced: synced || storeResult.savedLocal,
-      syncError,
+      synced: true,
+      attemptId: fullAttemptRecord.id,
+      savedAt: fullAttemptRecord.completedAt,
       studentSaved,
       attempt: clientAttempt,
       message: hasSubjectiveQuestions
-        ? 'Evaluasi berhasil dikumpulkan. Pilihan ganda telah dinilai otomatis; soal uraian dan studi kasus menunggu pemeriksaan dan publikasi guru.'
-        : 'Jawaban kuis dan nilai berhasil disimpan.',
+        ? 'Evaluasi berhasil disimpan permanen. Pilihan ganda telah dinilai otomatis; soal uraian dan studi kasus menunggu pemeriksaan dan publikasi guru.'
+        : 'Jawaban kuis dan nilai berhasil disimpan permanen ke database.',
     });
   } catch (err: any) {
     console.error('Quiz submission API error:', err);

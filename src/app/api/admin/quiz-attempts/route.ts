@@ -104,9 +104,8 @@ export async function GET(req: NextRequest) {
 
     const rawAttempts = await listEvaluationAttempts({ quizId, studentId });
     const attempts = rawAttempts.filter((att) => canTeacherAccessClass(sessionUser, att.className));
-    const sessions = listExamSessions({ quizId, studentId }).filter((s) =>
-      canTeacherAccessClass(sessionUser, s.className)
-    );
+    const rawSessions = await listExamSessions({ quizId, studentId });
+    const sessions = rawSessions.filter((s) => canTeacherAccessClass(sessionUser, s.className));
 
     return NextResponse.json({
       success: true,

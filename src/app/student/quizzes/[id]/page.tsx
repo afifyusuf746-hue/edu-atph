@@ -95,11 +95,13 @@ export default function StudentQuizTakerPage() {
   const [lastSavedTimeLabel, setLastSavedTimeLabel] = useState<string>('');
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string>('');
   const [attemptResult, setAttemptResult] = useState<any | null>(null);
   const [syncStatus, setSyncStatus] = useState<
     'idle' | 'saving' | 'synced' | 'local_only' | 'failed'
   >('idle');
   const [syncErrorDetail, setSyncErrorDetail] = useState<string>('');
+  const autosaveRetryRef = useRef<number>(0);
 
   // Refs for event coalescing & avoiding stale closures
   const selectedAnswersRef = useRef<Record<string, string>>({});
@@ -466,6 +468,7 @@ export default function StudentQuizTakerPage() {
         });
         const json = await res.json();
         if (res.ok && json.success) {
+          autosaveRetryRef.current = 0;
           hasUnsyncedChangesRef.current = false;
           setAutosaveStatus('saved');
           setLastSavedTimeLabel(
@@ -477,11 +480,29 @@ export default function StudentQuizTakerPage() {
           );
         } else {
           hasUnsyncedChangesRef.current = true;
-          setAutosaveStatus('unsynced');
+          if (autosaveRetryRef.current < 2) {
+            autosaveRetryRef.current++;
+            setTimeout(() => {
+              if (examStartedRef.current && !isSubmittedRef.current) {
+                syncDraftAnswersToServer(selectedAnswersRef.current);
+              }
+            }, 2000);
+          } else {
+            setAutosaveStatus('unsynced');
+          }
         }
       } catch {
         hasUnsyncedChangesRef.current = true;
-        setAutosaveStatus('unsynced');
+        if (autosaveRetryRef.current < 2) {
+          autosaveRetryRef.current++;
+          setTimeout(() => {
+            if (examStartedRef.current && !isSubmittedRef.current) {
+              syncDraftAnswersToServer(selectedAnswersRef.current);
+            }
+          }, 2000);
+        } else {
+          setAutosaveStatus('unsynced');
+        }
       }
     },
     [currentUser, getLocalDraftKey, getStudentHeaders, quizId]
@@ -860,8 +881,8 @@ export default function StudentQuizTakerPage() {
 
       const data = await response.json();
 
-      if (response.ok && data.success) {
-        // Exit fullscreen cleanly after submission
+      if (response.ok && data.success && data.synced) {
+        // Exit fullscreen cleanly after confirmed submission
         if (typeof document !== 'undefined' && document.fullscreenElement) {
           document.exitFullscreen?.().catch(() => {});
         }
@@ -872,32 +893,29 @@ export default function StudentQuizTakerPage() {
         setAttemptResult(data.attempt);
         setIsSubmitted(true);
         isSubmittedRef.current = true;
-
-        if (data.synced) {
-          setSyncStatus('synced');
-        } else {
-          setSyncStatus('local_only');
-          if (data.syncError) setSyncErrorDetail(data.syncError);
-        }
+        setSyncStatus('synced');
+        setSubmitError('');
 
         try {
           DataProvider.submitQuizAttempt(quiz.id, activeUser.id, formattedAnswers);
         } catch {}
       } else {
-        throw new Error(data.error || 'Gagal mengirim data ke server');
+        const errorMsg =
+          data.error ||
+          data.syncError ||
+          'Jawaban belum berhasil tersimpan. Jawaban Anda masih tersedia pada perangkat ini. Coba kirim ulang.';
+        setSubmitError(errorMsg);
+        setSyncStatus('failed');
+        setSyncErrorDetail(errorMsg);
       }
     } catch (err: any) {
-      console.warn('Submission fallback to local:', err);
-      const fallbackResult = DataProvider.submitQuizAttempt(
-        quiz.id,
-        activeUser.id,
-        formattedAnswers
-      );
-      setAttemptResult(fallbackResult);
-      setIsSubmitted(true);
-      isSubmittedRef.current = true;
-      setSyncStatus('local_only');
-      setSyncErrorDetail(err.message || 'Koneksi ke server terputus');
+      console.warn('Submission network error:', err);
+      const errorMsg =
+        err?.message ||
+        'Koneksi ke server terputus. Jawaban Anda masih aman pada perangkat ini. Silakan periksa jaringan dan coba kirim ulang.';
+      setSubmitError(errorMsg);
+      setSyncStatus('failed');
+      setSyncErrorDetail(errorMsg);
     } finally {
       setIsSubmitting(false);
       isSubmittingRef.current = false;
@@ -905,44 +923,7 @@ export default function StudentQuizTakerPage() {
   };
 
   const handleRetrySync = async () => {
-    if (!attemptResult || !currentUser || !quiz) return;
-    setSyncStatus('saving');
-    setSyncErrorDetail('');
-
-    const formattedAnswers = questions.map((q) => ({
-      questionId: q.id,
-      userAnswer: selectedAnswersRef.current[q.id] || '',
-    }));
-
-    try {
-      const response = await fetch('/api/quizzes/submit', {
-        method: 'POST',
-        headers: getStudentHeaders(currentUser),
-        body: JSON.stringify({
-          quizId: quiz.id,
-          studentId: currentUser.id,
-          studentName: currentUser.fullName,
-          studentEmail: currentUser.email || '',
-          studentNisn: currentUser.nisn || '-',
-          className: currentUser.className || 'XI AT 1',
-          answers: formattedAnswers,
-          startedAt: quizStartTime,
-          violationCount,
-          violationEvents,
-        }),
-      });
-
-      const data = await response.json();
-      if (response.ok && data.success && data.synced) {
-        setSyncStatus('synced');
-      } else {
-        setSyncStatus('failed');
-        setSyncErrorDetail(data.syncError || 'Gagal tersambung ke server');
-      }
-    } catch (err: any) {
-      setSyncStatus('failed');
-      setSyncErrorDetail(err.message || 'Koneksi gagal');
-    }
+    await handleSubmitQuiz();
   };
 
   if (loadingQuiz) {
@@ -1109,6 +1090,31 @@ export default function StudentQuizTakerPage() {
               </div>
             </div>
 
+            {Object.keys(selectedAnswers).length > 0 && (
+              <div className="p-4 rounded-2xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-teal-900 dark:text-teal-200">
+                  <CheckCircle className="w-4 h-4 text-teal-600 shrink-0" />
+                  <span>
+                    Ditemukan draf pengerjaan sebelumnya pada perangkat ini (<strong>{Object.keys(selectedAnswers).length} jawaban tersimpan</strong>). Draf akan otomatis dipulihkan saat Anda memulai ujian.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedAnswers({});
+                    selectedAnswersRef.current = {};
+                    try {
+                      const activeUser = currentUser || DataProvider.getCurrentUser();
+                      localStorage.removeItem(getLocalDraftKey(activeUser?.id));
+                    } catch {}
+                  }}
+                  className="text-slate-500 hover:text-rose-600 text-[11px] underline font-bold shrink-0 cursor-pointer"
+                >
+                  Reset Draf & Mulai Baru
+                </button>
+              </div>
+            )}
+
             {controlledConfig.enabled && (
               <div className="p-5 sm:p-6 rounded-2xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/80 space-y-4">
                 <div className="flex items-start gap-3">
@@ -1239,11 +1245,16 @@ export default function StudentQuizTakerPage() {
               )}
 
               {syncStatus === 'synced' && (
-                <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 font-bold">
-                  <CheckCircle className="w-4 h-4 text-emerald-600" />
-                  <span>
-                    Tersimpan di server • Jawaban evaluasi telah tercatat di dashboard guru
-                  </span>
+                <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-xs flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold">
+                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Hasil Berhasil Tersimpan Permanen di Database Supabase</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                    <span>ID: <strong className="font-mono text-slate-700 dark:text-slate-200">{attemptResult?.id}</strong></span>
+                    <span>•</span>
+                    <span>Waktu Simpan: {new Date(attemptResult?.completedAt || Date.now()).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} WIB</span>
+                  </div>
                 </div>
               )}
 
@@ -1530,6 +1541,43 @@ export default function StudentQuizTakerPage() {
         ) : (
           /* ACTIVE QUIZ QUESTION CARD */
           <div className="space-y-6">
+            {/* Submit Failure Alert Banner with Retry Button */}
+            {submitError && (
+              <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-rose-900 dark:text-rose-200">
+                      Jawaban belum berhasil tersimpan ke database.
+                    </p>
+                    <p className="text-[11px] text-rose-800 dark:text-rose-300">
+                      {submitError}
+                    </p>
+                    <p className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 mt-0.5">
+                      Jawaban Anda masih aman pada perangkat ini. Silakan periksa jaringan dan coba kirim ulang.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSubmitQuiz}
+                  disabled={isSubmitting}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold shrink-0 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Mengirim...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Coba Kirim Ulang</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
             {/* Resumed Session / Teacher Unlock Banner */}
             {(sessionResumed || resumedByTeacherInfo) && (
               <div className="p-3.5 rounded-2xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 flex flex-wrap items-center justify-between gap-2 text-xs text-teal-900 dark:text-teal-200">

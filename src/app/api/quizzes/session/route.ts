@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
 
     if (staffAccess) {
       if (requestedStudentId) {
-        const session = getExamSession(quizId, requestedStudentId);
+        const session = await getExamSession(quizId, requestedStudentId);
         if (session && !canTeacherAccessClass(sessionUser, session.className)) {
           return NextResponse.json(
             { error: 'Akses ditolak: Kelas siswa berada di luar kewenangan Anda.' },
@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
         });
       }
 
-      const allSessions = listExamSessions({ quizId }).filter((s) =>
+      const allSessions = (await listExamSessions({ quizId })).filter((s) =>
         canTeacherAccessClass(sessionUser, s.className)
       );
       return NextResponse.json({
@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const session = getExamSession(quizId, effectiveStudentId);
+    const session = await getExamSession(quizId, effectiveStudentId);
     let lockedAttempt = null;
     if (
       session &&
@@ -132,7 +132,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'ID siswa wajib diisi.' }, { status: 400 });
       }
 
-      const existingSession = getExamSession(quizId, targetStudentId);
+      const existingSession = await getExamSession(quizId, targetStudentId);
       if (existingSession && !canTeacherAccessClass(sessionUser, existingSession.className)) {
         return NextResponse.json(
           { error: 'Akses ditolak: Kelas siswa berada di luar kewenangan Anda.' },
@@ -187,7 +187,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'start') {
-      const result = startOrResumeExamSession({
+      const result = await startOrResumeExamSession({
         quizId,
         studentId,
         studentName,
@@ -218,7 +218,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'autosave') {
-      const result = autosaveExamSession({
+      const result = await autosaveExamSession({
         quizId,
         studentId,
         studentName,
@@ -250,7 +250,7 @@ export async function POST(req: NextRequest) {
       // Ignore blur-only signals unless explicitly marked as extended_blur
       const rawType = body.event?.type;
       if (rawType === 'blur_only' || rawType === 'dialog_blur') {
-        const currentSession = getExamSession(quizId, studentId);
+        const currentSession = await getExamSession(quizId, studentId);
         return NextResponse.json({
           success: true,
           recorded: false,

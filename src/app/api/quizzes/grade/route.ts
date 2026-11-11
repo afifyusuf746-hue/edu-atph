@@ -246,16 +246,12 @@ export async function POST(req: NextRequest) {
         calc.finalWeightedScore !== null ? calc.finalWeightedScore : calc.mcqScore,
       passed: calc.isPassed,
       isPassed: calc.isPassed,
-      status: nextIsPublished
-        ? 'graded'
-        : calc.isComplete
-        ? 'complete'
-        : 'incomplete',
+      status: nextIsPublished ? 'graded' : 'submitted',
       answers: updatedAnswers,
     };
 
     // Simpan juga preferensi bobot & visibilitas pembahasan untuk kuis ini
-    updateQuizSettings(attempt.quizId, {
+    await updateQuizSettings(attempt.quizId, {
       weightsConfig: { mcqWeight: wMcq, essayWeight: wEssay, caseStudyWeight: wCase },
       ...(typeof allowStudentReview === 'boolean' ? { allowStudentReview } : {}),
       updatedBy: resolvedGrader,

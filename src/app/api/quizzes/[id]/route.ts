@@ -105,7 +105,7 @@ export async function PATCH(
       };
     }
 
-    const updated = updateQuizSettings(quizId, {
+    const updated = await updateQuizSettings(quizId, {
       ...(weightsConfig ? { weightsConfig } : {}),
       ...(validatedExamConfig ? { controlledExamConfig: validatedExamConfig } : {}),
       ...(typeof allowStudentReview === 'boolean' ? { allowStudentReview } : {}),
