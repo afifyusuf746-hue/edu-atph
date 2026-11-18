@@ -36,12 +36,31 @@ export interface MaterialCategory {
   orderIndex: number;
 }
 
+export type MaterialSourceType = 'pdf' | 'document' | 'youtube' | 'gdrive' | 'webpage' | 'other';
+
+export interface MaterialSource {
+  id: string;
+  materialId?: string;
+  title: string;
+  url: string;
+  sourceType: MaterialSourceType;
+  previewUrl?: string;
+  canEmbed?: boolean;
+  fileSize?: string;
+  orderIndex: number;
+  createdAt?: string;
+}
+
 export interface MaterialAttachment {
   id: string;
   name: string;
   fileUrl: string;
   fileSize: string;
   fileType: 'pdf' | 'doc' | 'sheet' | 'slide' | 'image' | 'video' | 'archive' | 'other';
+  sourceType?: MaterialSourceType;
+  previewUrl?: string;
+  canEmbed?: boolean;
+  orderIndex?: number;
 }
 
 export interface TeachingMaterial {
@@ -60,6 +79,7 @@ export interface TeachingMaterial {
   videoUrl?: string; // YouTube embed link
   pdfUrl?: string;
   attachments: MaterialAttachment[];
+  sources?: MaterialSource[];
   orderIndex: number;
   status: 'published' | 'draft' | 'archived';
   createdAt: string;

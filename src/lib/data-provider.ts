@@ -579,6 +579,114 @@ export const DataProvider = {
   },
 
   /**
+   * Fetch materials directly from the server / Supabase API
+   */
+  async fetchMaterialsAsync(): Promise<TeachingMaterial[]> {
+    if (typeof window === 'undefined') {
+      return this.getMaterials();
+    }
+    try {
+      const res = await fetch('/api/materials', {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.success && Array.isArray(data.materials)) {
+          // Update local cache
+          setItem(STORAGE_KEYS.MATERIALS, data.materials);
+          return data.materials;
+        }
+      }
+    } catch (err) {
+      console.warn('fetchMaterialsAsync failed, falling back to local cache:', err);
+    }
+    return this.getMaterials();
+  },
+
+  /**
+   * Save (insert or update) material to Supabase permanently via server API.
+   * Throws or returns error if database fails.
+   */
+  async saveMaterialAsync(
+    material: Partial<TeachingMaterial> & { title: string; topic: string }
+  ): Promise<{ success: boolean; material?: TeachingMaterial; error?: string; message?: string }> {
+    if (typeof window === 'undefined') {
+      return { success: false, error: 'Tidak dapat menyimpan dari lingkungan server langsung.' };
+    }
+
+    try {
+      const isEdit = Boolean(material.id);
+      const url = isEdit ? `/api/materials/${material.id}` : '/api/materials';
+      const method = isEdit ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(material),
+      });
+
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok || !json?.success) {
+        return {
+          success: false,
+          error: json?.error || `Gagal menyimpan materi ke database (HTTP ${res.status}).`,
+        };
+      }
+
+      const saved: TeachingMaterial = json.material;
+
+      // Update local cache immediately
+      let materials = this.getMaterials();
+      const existingIdx = materials.findIndex((m) => m.id === saved.id);
+      if (existingIdx !== -1) {
+        materials[existingIdx] = saved;
+      } else {
+        materials.unshift(saved);
+      }
+      setItem(STORAGE_KEYS.MATERIALS, materials);
+
+      return {
+        success: true,
+        material: saved,
+        message: json.message,
+      };
+    } catch (err) {
+      console.error('saveMaterialAsync network error:', err);
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Koneksi jaringan terputus saat menyimpan materi.',
+      };
+    }
+  },
+
+  /**
+   * Delete material permanently from Supabase via server API
+   */
+  async deleteMaterialAsync(id: string): Promise<{ success: boolean; error?: string }> {
+    if (typeof window === 'undefined') return { success: false };
+    try {
+      const res = await fetch(`/api/materials/${id}`, {
+        method: 'DELETE',
+        headers: { Accept: 'application/json' },
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        return { success: false, error: json?.error || 'Gagal menghapus materi dari server.' };
+      }
+
+      this.deleteMaterial(id);
+      return { success: true };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Koneksi jaringan bermasalah saat menghapus materi.',
+      };
+    }
+  },
+
+  /**
    * Strip large base64 data URLs from stored materials to free localStorage quota.
    * Call once when quota issues are detected (attachments > 256KB).
    */
